@@ -269,6 +269,9 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .fed-group-head{display:flex;align-items:center;gap:10px;padding:13px 18px;background:var(--paper);cursor:pointer;user-select:none;font-weight:800;font-size:14px;}
 .fed-group-head:hover{background:var(--teal-soft);}
 .fed-group-head .fed-name{flex:1;}
+.fed-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.fed-summary .stat-chip{background:var(--panel);border:1px solid var(--line);border-radius:100px;padding:4px 11px;color:var(--ink-2);font-size:11.5px;font-weight:700;white-space:nowrap;}
+.fed-summary .stat-chip b{color:var(--ink);font-variant-numeric:tabular-nums;}
 .fed-group-head.fed-open .cc-caret{transform:rotate(90deg);}
 .fed-group-body{display:none;}
 .fed-group-body.fed-open{display:block;}
@@ -357,7 +360,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <!-- ============ SCREEN 1: BOOT / CONNECTING TO SUPABASE ============ -->
 <div id="screen-boot" class="stage">
   <div class="stage-card">
-    <div class="brandmark">ع.ن</div>
+    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
     <h1 class="stage-title">نظام إدارة العهد النقدية</h1>
     <p class="stage-sub">منصّة موحّدة لإدارة العهد النقدية والمصاريف عبر اتحادات متعددة.</p>
     <div class="card card-pad">
@@ -370,7 +373,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <!-- ============ SCREEN 2: LOGIN ============ -->
 <div id="screen-login" class="stage hidden">
   <div class="stage-card">
-    <div class="brandmark">ع.ن</div>
+    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
     <h1 class="stage-title">تسجيل الدخول</h1>
     <p class="stage-sub">أدخل بيانات حسابك للمتابعة.</p>
     <div class="card card-pad">
@@ -393,7 +396,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <div id="app-shell" class="hidden">
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
-      <div class="mark">ع.ن</div>
+      <div class="mark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:9px;"></div>
       <div class="fed" id="sbFedName">—<small>نظام العهد النقدية</small></div>
     </div>
     <nav class="sb-nav" id="sbNav"></nav>
@@ -1008,7 +1011,11 @@ function barHTML(pct, color, w){
 function pctColor(pct){ return pct>=90 ? 'var(--danger)' : (pct>=60 ? 'var(--gold)' : 'var(--teal)'); }
 
 /* مكوّن مشترك: تجميع أي قائمة حسب الاتحاد وعرضها كشجرة قابلة للطي (لصلاحية المراجع) */
-function renderFederationTree(items, getFedId, renderBodyFn){
+function statChip(label, value){
+  return `<span class="stat-chip">${esc(label)}: <b>${esc(String(value))}</b></span>`;
+}
+
+function renderFederationTree(items, getFedId, renderBodyFn, summaryFn){
   const groups = {};
   items.forEach(it=>{
     const fid = getFedId(it) || '—';
@@ -1022,13 +1029,14 @@ function renderFederationTree(items, getFedId, renderBodyFn){
   if(!fedIds.length) return `<div class="empty-row">لا توجد بيانات</div>`;
   return fedIds.map(fid=>{
     const fed = federationById(fid);
+    const summaryHTML = summaryFn ? summaryFn(groups[fid]) : '';
     return `<div class="fed-group">
-      <div class="fed-group-head fed-open" onclick="this.classList.toggle('fed-open');this.nextElementSibling.classList.toggle('fed-open')">
+      <div class="fed-group-head" onclick="this.classList.toggle('fed-open');this.nextElementSibling.classList.toggle('fed-open')">
         <span class="cc-caret">▸</span>
         <span class="fed-name">🏛️ ${esc(fed?fed.federation_name_ar:'—')}</span>
-        <span class="badge badge-muted">${groups[fid].length}</span>
+        <div class="fed-summary">${summaryHTML}<span class="badge badge-muted">${groups[fid].length}</span></div>
       </div>
-      <div class="fed-group-body fed-open">${renderBodyFn(groups[fid])}</div>
+      <div class="fed-group-body">${renderBodyFn(groups[fid])}</div>
     </div>`;
   }).join('');
 }
@@ -1255,7 +1263,12 @@ Views.dashboard = function(){
       </div>
     </div>
     <div class="mt-16">
-      ${isAud ? renderFederationTree(list, c=>c.federation_id, tableFor) : tableFor(list)}
+      ${isAud ? renderFederationTree(list, c=>c.federation_id, tableFor, items=>{
+        const open = items.filter(c=>c.custody_status==='مفتوحة').length;
+        const pending = items.filter(c=>c.custody_status==='قيد الاعتماد').length;
+        let balance=0; items.forEach(c=>{ balance += custodyFinancials(c).remainingBalance; });
+        return statChip('مفتوحة', open) + statChip('قيد الاعتماد', pending) + statChip('الرصيد', money(balance));
+      }) : tableFor(list)}
     </div>
   `;
 };
@@ -1315,7 +1328,11 @@ Views.budgetsList = function(){
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="mt-16">
-      ${isAud ? renderFederationTree(list, b=>b.federation_id, tableFor) : tableFor(list)}
+      ${isAud ? renderFederationTree(list, b=>b.federation_id, tableFor, items=>{
+        const total = items.filter(b=>b.Record_Status!=='ملغى').reduce((s,b)=>s+Number(b.estimated_amount||0),0);
+        const pending = items.filter(b=>b.Record_Status==='قيد الاعتماد').length;
+        return statChip('الإجمالي', money(total)) + statChip('قيد الاعتماد', pending);
+      }) : tableFor(list)}
     </div>
   `;
 };
@@ -1360,7 +1377,10 @@ Views.transfersList = function(){
     </div>
     ${stats}
     <div class="mt-16">
-      ${isAud ? renderFederationTree(list, t=>t.federation_id, tableFor) : tableFor(list)}
+      ${isAud ? renderFederationTree(list, t=>t.federation_id, tableFor, items=>{
+        const total = items.reduce((s,t)=>s+Number(t.amount||0),0);
+        return statChip('الإجمالي', money(total));
+      }) : tableFor(list)}
     </div>
   `;
 };
@@ -1419,7 +1439,11 @@ Views.expensesList = function(){
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="mt-16">
-      ${isAud ? renderFederationTree(list, e=>e.federation_id, tableFor) : tableFor(list)}
+      ${isAud ? renderFederationTree(list, e=>e.federation_id, tableFor, items=>{
+        const approved = items.filter(e=>e.disbursement_status==='معتمد').reduce((s,e)=>s+Number(e.amount||0),0);
+        const pending = items.filter(e=>e.disbursement_status==='غير معتمد').length;
+        return statChip('معتمد', money(approved)) + statChip('بانتظار الاعتماد', pending);
+      }) : tableFor(list)}
     </div>
   `;
 };
@@ -2423,7 +2447,11 @@ Views.users = function(){
     </div>
     <div class="alert alert-info">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم (تحويلهم إلى "مفتوح") إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="mt-16">
-      ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor) : tableFor(list)}
+      ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor, items=>{
+        const balance = items.reduce((s,x)=>s+userOpenBalance(x.user_id),0);
+        const pendingCount = items.filter(x=>x.user_status==='تحت المعالجة').length;
+        return statChip('الرصيد', money(balance)) + (pendingCount ? statChip('بانتظار الاعتماد', pendingCount) : '');
+      }) : tableFor(list)}
     </div>
   `;
 };
@@ -2582,7 +2610,11 @@ Views.costCenters = function(){
   }
 
   const bodyHTML = isAud
-    ? renderFederationTree(list, cc=>cc.federation_id, renderTreeForFedList)
+    ? renderFederationTree(list, cc=>cc.federation_id, renderTreeForFedList, items=>{
+        const total = items.reduce((s,cc)=>s+costCenterSpent(cc.cost_center_id),0);
+        const mains = items.filter(cc=>!cc.parent_cost_center_id).length;
+        return statChip('عدد المراكز الرئيسية', mains) + statChip('إجمالي المصروف', money(total));
+      })
     : renderTreeForFedList(list);
 
   return `
