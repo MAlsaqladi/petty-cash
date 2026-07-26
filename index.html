@@ -264,6 +264,16 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .cc-pick-empty:hover{background:var(--panel);}
 .cc-pick-sub{padding-right:34px;color:var(--ink-2);}
 
+/* ---------- Federation group tree (auditor views) ---------- */
+.fed-group{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:14px;overflow:hidden;}
+.fed-group-head{display:flex;align-items:center;gap:10px;padding:13px 18px;background:var(--paper);cursor:pointer;user-select:none;font-weight:800;font-size:14px;}
+.fed-group-head:hover{background:var(--teal-soft);}
+.fed-group-head .fed-name{flex:1;}
+.fed-group-head.cc-open .cc-caret{transform:rotate(90deg);}
+.fed-group-body{display:none;}
+.fed-group-body.cc-open{display:block;}
+.fed-group-body .tbl-wrap{border:none;border-radius:0;border-top:1px solid var(--line);}
+
 /* ---------- Cost center tree ---------- */
 .cc-forest{display:flex;flex-direction:column;gap:10px;}
 .cc-tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
@@ -486,7 +496,7 @@ const Perm = {
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
-  canManageUsers: u => !Perm.isEmployee(u) && !Perm.isAuditor(u),
+  canManageUsers: u => !Perm.isEmployee(u),
   canChangeUserStatus: u => Perm.isTopApprover(u),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
   canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
@@ -674,6 +684,14 @@ async function viewAttachment(filePath){
   try{ json = await res.json(); } catch(e){ toast('استجابة غير متوقعة من الخادم','danger'); return; }
   if(json.error){ toast('تعذّر فتح المرفق: ' + json.error.message, 'danger'); return; }
   window.open(json.data.url, '_blank');
+}
+function locationBtnHTML(loc){
+  if(!loc || !/^https?:\/\//.test(loc)) return '';
+  return `<button class="btn btn-ghost btn-sm" onclick="window.open('${esc(loc)}','_blank')" title="فتح الموقع على الخريطة">📍 الموقع</button>`;
+}
+function attachBtnHTML(filePath){
+  if(!filePath) return '';
+  return `<button class="btn btn-ghost btn-sm" onclick="viewAttachment('${esc(filePath)}')" title="عرض المرفق">📎 المرفق</button>`;
 }
 
 /* ---------------------------- Bulk load ---------------------------- */
@@ -891,7 +909,7 @@ const NAV_ITEMS = [
   {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
   {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isEmployee(u)},
   {key:'expensetypes', label:'أنواع المصاريف', ico:ICONS.list, show: u=>true},
-  {key:'federations', label:'الاتحادات', ico:ICONS.building, show: u=>Perm.isAuditor(u)},
+  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)},
 ];
 
 App.renderShell = function(){
@@ -901,8 +919,10 @@ App.renderShell = function(){
   document.getElementById('sbAvatar').textContent = (u.employee_name_ar||u.user_name||'?').trim()[0] || '?';
   document.getElementById('sbWho').innerHTML = esc(u.employee_name_ar || u.user_name) + '<small>' + esc(u.user_type) + '</small>';
   const nav = document.getElementById('sbNav');
-  nav.innerHTML = NAV_ITEMS.filter(it=>it.show(u)).map(it=>
-    `<button class="sb-item" data-nav="${it.key}" onclick="App.go('${it.key}')"><span class="ico">${it.ico}</span><span>${it.label}</span></button>`
+  nav.innerHTML = NAV_ITEMS.filter(it=>it.show(u)).map(it=>{
+    const label = typeof it.label === 'function' ? it.label(u) : it.label;
+    return `<button class="sb-item" data-nav="${it.key}" onclick="App.go('${it.key}')"><span class="ico">${it.ico}</span><span>${label}</span></button>`;
+  }
   ).join('');
 };
 
@@ -923,7 +943,7 @@ const VIEW_TITLES = {
   userDetail:{title:'تفاصيل المستخدم', crumb:'العهد والمصاريف الخاصة بهذا المستخدم'},
   costcenters:{title:'مراكز التكلفة', crumb:'مراكز التكلفة الخاصة بكل اتحاد'},
   expensetypes:{title:'أنواع المصاريف', crumb:'قائمة موحّدة لجميع الاتحادات'},
-  federations:{title:'الاتحادات', crumb:'عرض شامل لكل الاتحادات (صلاحية المراجع)'},
+  federations:{title:'الاتحادات', crumb:'عرض شامل أو بيانات اتحادك (حسب صلاحيتك)'},
   profile:{title:'ملفي الشخصي', crumb:'بياناتي وتغيير كلمة المرور'},
 };
 
@@ -986,6 +1006,32 @@ function barHTML(pct, color, w){
   </div>`;
 }
 function pctColor(pct){ return pct>=90 ? 'var(--danger)' : (pct>=60 ? 'var(--gold)' : 'var(--teal)'); }
+
+/* مكوّن مشترك: تجميع أي قائمة حسب الاتحاد وعرضها كشجرة قابلة للطي (لصلاحية المراجع) */
+function renderFederationTree(items, getFedId, renderBodyFn){
+  const groups = {};
+  items.forEach(it=>{
+    const fid = getFedId(it) || '—';
+    if(!groups[fid]) groups[fid] = [];
+    groups[fid].push(it);
+  });
+  const fedIds = Object.keys(groups).sort((a,b)=>{
+    const fa = federationById(a), fb = federationById(b);
+    return (fa?fa.federation_name_ar:'').localeCompare(fb?fb.federation_name_ar:'', 'ar');
+  });
+  if(!fedIds.length) return `<div class="empty-row">لا توجد بيانات</div>`;
+  return fedIds.map(fid=>{
+    const fed = federationById(fid);
+    return `<div class="fed-group">
+      <div class="fed-group-head" onclick="this.classList.toggle('fed-open');this.nextElementSibling.classList.toggle('fed-open')">
+        <span class="cc-caret">▸</span>
+        <span class="fed-name">🏛️ ${esc(fed?fed.federation_name_ar:'—')}</span>
+        <span class="badge badge-muted">${groups[fid].length}</span>
+      </div>
+      <div class="fed-group-body">${renderBodyFn(groups[fid])}</div>
+    </div>`;
+  }).join('');
+}
 
 /* =========================================================================
    HOME — landing page: stats, quick actions, pending items, recent activity
@@ -1161,33 +1207,40 @@ Views.dashboard = function(){
   list = list.slice().sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
 
   const addBtn = Perm.canRequestCustody(u) ? `<button class="btn btn-primary" onclick="Modals.addCustody()">+ طلب عهدة جديدة</button>` : '';
-  const showFed = Perm.isAuditor(u);
+  const isAud = Perm.isAuditor(u);
 
-  const rows = list.length ? list.map(c=>{
-    const f = custodyFinancials(c);
-    const overdue = isOverdue(c);
-    const fed = federationById(c.federation_id);
-    const w = custodyWaitingLabel(c);
-    const canRowApprove = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id && f.budgets.length>0;
-    const canRowCancel = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id;
-    const rowBtns = [];
-    if(canRowApprove) rowBtns.push(`<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();Actions.approveCustodyRequest('${c.custody_id}')">اعتماد</button>`);
-    if(canRowCancel) rowBtns.push(`<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();Actions.rejectCustodyRequest('${c.custody_id}')">إلغاء</button>`);
-    return `<tr class="clickable-row" onclick="App.go('custodyDetail',{id:'${c.custody_id}'})">
-      <td>
-        <b>${esc(c.description_ar||'بدون وصف')}</b>
-        <div class="muted small">${esc(userLabel(c.received_by_user_id))}</div>
-      </td>
-      ${showFed?`<td>${esc(fed?fed.federation_name_ar:'—')}</td>`:''}
-      <td>${custodyStatusBadge(c.custody_status)}<div class="small mt-8"><span class="badge badge-${w.cls}">${esc(w.text)}</span></div>${overdue?'<div class="overdue-flag" style="margin-top:4px;">⚠ متأخرة</div>':''}</td>
-      <td class="num">${money(f.approvedBudget)}</td>
-      <td class="num">${money(f.totalTransferred)}</td>
-      <td class="num">${money(f.remainingBalance)}</td>
-      <td><div class="flex center gap-8">${barHTML(f.spentPct, pctColor(f.spentPct))}<span class="small muted">${f.spentPct}%</span></div></td>
-      <td>${fmtDate(c.Closing_date)}</td>
-      <td>${rowBtns.length ? `<div class="flex gap-8">${rowBtns.join('')}</div>` : ''}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="${showFed?9:8}"><div class="empty-row"><div class="ico">🗂️</div>لا توجد عهد مطابقة</div></td></tr>`;
+  function rowsHTML(items){
+    return items.length ? items.map(c=>{
+      const f = custodyFinancials(c);
+      const overdue = isOverdue(c);
+      const w = custodyWaitingLabel(c);
+      const canRowApprove = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id && f.budgets.length>0;
+      const canRowCancel = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id;
+      const rowBtns = [];
+      if(canRowApprove) rowBtns.push(`<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();Actions.approveCustodyRequest('${c.custody_id}')">اعتماد</button>`);
+      if(canRowCancel) rowBtns.push(`<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();Actions.rejectCustodyRequest('${c.custody_id}')">إلغاء</button>`);
+      return `<tr class="clickable-row" onclick="App.go('custodyDetail',{id:'${c.custody_id}'})">
+        <td>
+          <b>${esc(c.description_ar||'بدون وصف')}</b>
+          <div class="muted small">${esc(userLabel(c.received_by_user_id))}</div>
+        </td>
+        <td>${custodyStatusBadge(c.custody_status)}<div class="small mt-8"><span class="badge badge-${w.cls}">${esc(w.text)}</span></div>${overdue?'<div class="overdue-flag" style="margin-top:4px;">⚠ متأخرة</div>':''}</td>
+        <td class="num">${money(f.approvedBudget)}</td>
+        <td class="num">${money(f.totalTransferred)}</td>
+        <td class="num">${money(f.remainingBalance)}</td>
+        <td><div class="flex center gap-8">${barHTML(f.spentPct, pctColor(f.spentPct))}<span class="small muted">${f.spentPct}%</span></div></td>
+        <td>${fmtDate(c.Closing_date)}</td>
+        <td>${rowBtns.length ? `<div class="flex gap-8">${rowBtns.join('')}</div>` : ''}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8"><div class="empty-row"><div class="ico">🗂️</div>لا توجد عهد مطابقة</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap">
+      <table class="tbl"><thead><tr>
+        <th>العهدة</th><th>الحالة</th><th>الميزانية المعتمدة</th><th>المحوّل</th><th>الرصيد الحالي</th><th>نسبة الصرف</th><th>تاريخ الإغلاق</th><th></th>
+      </tr></thead><tbody>${rowsHTML(items)}</tbody></table>
+    </div>`;
+  }
 
   return `
     <div class="section-head">
@@ -1201,10 +1254,8 @@ Views.dashboard = function(){
         <span class="ico">🔎</span>
       </div>
     </div>
-    <div class="tbl-wrap mt-16">
-      <table class="tbl"><thead><tr>
-        <th>العهدة</th>${showFed?'<th>الاتحاد</th>':''}<th>الحالة</th><th>الميزانية المعتمدة</th><th>المحوّل</th><th>الرصيد الحالي</th><th>نسبة الصرف</th><th>تاريخ الإغلاق</th><th></th>
-      </tr></thead><tbody>${rows}</tbody></table>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, c=>c.federation_id, tableFor) : tableFor(list)}
     </div>
   `;
 };
@@ -1238,26 +1289,34 @@ Views.budgetsList = function(){
   const tabsHTML = tabs.map(t=>`<button class="pill-tab ${ListFilter.budgets===t.k?'active':''}" onclick="Views.setListFilter('budgets','${t.k}')">${t.l}</button>`).join('');
   if(ListFilter.budgets!=='all') list = list.filter(b=>b.Record_Status===ListFilter.budgets);
   list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
-  const rows = list.length ? list.map(b=>{
-    const c = DB.custodies.find(x=>x.custody_id===b.custody_id);
-    return `<tr style="${b.Record_Status==='ملغى'?'opacity:.55;':''}">
-      <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${b.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
-      <td>${esc(expenseTypeLabel(b.expense_type_id))}</td>
-      <td>${esc(costCenterLabel(b.cost_center_id))}</td>
-      <td class="num">${money(b.estimated_amount)}</td>
-      <td>${budgetStatusBadge(b.Record_Status)}</td>
-      <td>${fmtDate(b.created_at)}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('budget','${b.custody_id}','${b.budget_id}')">تفاصيل</button></td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد بنود</div></td></tr>`;
+  function rowsFor(items){
+    return items.length ? items.map(b=>{
+      const c = DB.custodies.find(x=>x.custody_id===b.custody_id);
+      return `<tr style="${b.Record_Status==='ملغى'?'opacity:.55;':''}">
+        <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${b.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
+        <td>${esc(expenseTypeLabel(b.expense_type_id))}</td>
+        <td>${esc(costCenterLabel(b.cost_center_id))}</td>
+        <td class="num">${money(b.estimated_amount)}</td>
+        <td>${budgetStatusBadge(b.Record_Status)}</td>
+        <td>${fmtDate(b.created_at)}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('budget','${b.custody_id}','${b.budget_id}')">تفاصيل</button></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد بنود</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th><th></th></tr></thead>
+    <tbody>${rowsFor(items)}</tbody></table></div>`;
+  }
+  const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div>
       <button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
-    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, b=>b.federation_id, tableFor) : tableFor(list)}
+    </div>
   `;
 };
 
@@ -1285,7 +1344,7 @@ Views.transfersList = function(){
       <td>${esc(t.currency||'SAR')}</td>
       <td>${esc(userLabel(t.created_by))}</td>
       <td>${fmtDateTime(t.created_at)}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button></td>
+      <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
     </tr>`;
   }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد تحويلات</div></td></tr>`;
   return `
@@ -1318,31 +1377,42 @@ Views.expensesList = function(){
   const tabsHTML = tabs.map(t=>`<button class="pill-tab ${ListFilter.expenses===t.k?'active':''}" onclick="Views.setListFilter('expenses','${t.k}')">${t.l}</button>`).join('');
   if(ListFilter.expenses!=='all') list = list.filter(e=>e.disbursement_status===ListFilter.expenses);
   list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
-  const rows = list.length ? list.map(e=>{
-    const c = DB.custodies.find(x=>x.custody_id===e.custody_id);
-    const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpense(u) && c && c.federation_id===u.federation_id;
-    return `<tr style="${e.disbursement_status==='ملغى'?'opacity:.55;':''}">
-      <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${e.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
-      <td>${esc(expenseTypeLabel(e.expense_type_id))}</td>
-      <td>${esc(costCenterLabel(e.cost_center_id))}</td>
-      <td>${esc(e.statement||'—')}</td>
-      <td class="num">${money(e.amount)}</td>
-      <td>${expenseStatusBadge(e.disbursement_status)}</td>
-      <td>${esc(userLabel(e.created_by))}</td>
-      <td><div class="flex gap-8">
-        <button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('expense','${e.custody_id}','${e.closure_id}')">تفاصيل</button>
-        ${canApprove?`<button class="btn btn-primary btn-sm" onclick="Actions.approveExpense('${e.custody_id}','${e.closure_id}')">اعتماد</button>`:''}
-      </div></td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="8"><div class="empty-row">لا توجد مصاريف</div></td></tr>`;
+  list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
+  function rowsFor(items){
+    return items.length ? items.map(e=>{
+      const c = DB.custodies.find(x=>x.custody_id===e.custody_id);
+      const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpense(u) && c && c.federation_id===u.federation_id;
+      return `<tr style="${e.disbursement_status==='ملغى'?'opacity:.55;':''}">
+        <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${e.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
+        <td>${esc(expenseTypeLabel(e.expense_type_id))}</td>
+        <td>${esc(costCenterLabel(e.cost_center_id))}</td>
+        <td>${esc(e.statement||'—')}</td>
+        <td class="num">${money(e.amount)}</td>
+        <td>${expenseStatusBadge(e.disbursement_status)}</td>
+        <td>${esc(userLabel(e.created_by))}</td>
+        <td><div class="flex gap-8 wrap">
+          ${locationBtnHTML(e.entry_location)}
+          ${attachBtnHTML(e.file)}
+          <button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('expense','${e.custody_id}','${e.closure_id}')">تفاصيل</button>
+          ${canApprove?`<button class="btn btn-primary btn-sm" onclick="Actions.approveExpense('${e.custody_id}','${e.closure_id}')">اعتماد</button>`:''}
+        </div></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8"><div class="empty-row">لا توجد مصاريف</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>البيان</th><th>المبلغ</th><th>الحالة</th><th>بواسطة</th><th></th></tr></thead>
+    <tbody>${rowsFor(items)}</tbody></table></div>`;
+  }
+  const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div>
       <button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
-    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>البيان</th><th>المبلغ</th><th>الحالة</th><th>بواسطة</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, e=>e.federation_id, tableFor) : tableFor(list)}
+    </div>
   `;
 };
 Views.setListFilter = function(list, k){ ListFilter[list] = k; App.render(); };
@@ -1469,7 +1539,7 @@ Views.custodyDetail = function(id){
       <td>${esc(t.statement||'—')}</td>
       <td class="num">${money(t.amount)}</td>
       <td>${esc(userLabel(t.created_by))}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${c.custody_id}','${t.transfer_id}')">تفاصيل</button></td>
+      <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${c.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
     </tr>`).join('') : `<tr><td colspan="5"><div class="empty-row">لا توجد تحويلات بعد</div></td></tr>`;
   const transfersHTML = `
   <div class="card mt-24">
@@ -1485,7 +1555,11 @@ Views.custodyDetail = function(id){
   const expenseRows = f.expenses.length ? f.expenses.map(e=>{
     const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpense(u) && sameFed;
     const canEditExp = Perm.canEditExpense(u,c,e);
-    const rowActions = [`<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('expense','${c.custody_id}','${e.closure_id}')">تفاصيل</button>`];
+    const rowActions = [
+      locationBtnHTML(e.entry_location),
+      attachBtnHTML(e.file),
+      `<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('expense','${c.custody_id}','${e.closure_id}')">تفاصيل</button>`
+    ];
     if(canEditExp) rowActions.push(`<button class="btn btn-ghost btn-sm" onclick="Modals.editExpense('${c.custody_id}','${e.closure_id}')">تعديل</button>`);
     if(canApprove){
       rowActions.push(`<button class="btn btn-primary btn-sm" onclick="Actions.approveExpense('${c.custody_id}','${e.closure_id}')">اعتماد</button>`);
@@ -1498,7 +1572,7 @@ Views.custodyDetail = function(id){
       <td class="num">${money(e.amount)}</td>
       <td>${expenseStatusBadge(e.disbursement_status)}</td>
       <td>${esc(userLabel(e.created_by))}</td>
-      <td><div class="flex gap-8">${rowActions.join('')}</div></td>
+      <td><div class="flex gap-8 wrap">${rowActions.join('')}</div></td>
     </tr>`;
   }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد مصاريف مسجّلة بعد</div></td></tr>`;
   const expenseHint = c.custody_status==='مفتوحة' && f.availableToSpend<=0 && f.pendingExpenseCount===0
@@ -1732,7 +1806,7 @@ Modals.addTransfer = function(custodyId){
     <div class="field mt-12"><label>المبلغ المراد تحويله</label><input type="number" id="trAmt" min="0" max="${f.pendingTransfer}" step="0.01" value="${f.pendingTransfer}"></div>
     <div class="field"><label>العملة</label><select id="trCur">${CURRENCIES.map(cu=>`<option ${cu==='SAR'?'selected':''}>${cu}</option>`).join('')}</select></div>
     <div class="field full"><label>بيان التحويل</label><input type="text" id="trNote" placeholder="مثال: تحويل الدفعة الأولى"></div>
-    <div class="field full"><label>مرفق (صورة أو PDF) <span class="muted">— اختياري</span></label><input type="file" id="trFile" accept="image/*,.pdf"></div>
+    <div class="field full"><label>مرفق (صورة أو PDF) <span class="muted">— إلزامي</span></label><input type="file" id="trFile" accept="image/*,.pdf" required></div>
   `;
   openModalHTML(modalShell('addTransferModal','تحويل رصيد للعهدة', body, false,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
@@ -1942,7 +2016,7 @@ Modals.viewAudit = function(kind, custodyId, recordId){
       ['نوع المصروف', expenseTypeLabel(e.expense_type_id)],
       ['مركز التكلفة', costCenterLabel(e.cost_center_id)],
       ['البيان', e.statement || '—'],
-      ['موقع/جهة الصرف', e.entry_location || '—'],
+      ['موقع/جهة الصرف', e.entry_location || '—', 'link'],
       ['المبلغ', money(e.amount)],
       ['العملة', e.currency||'SAR'],
       ['الحالة', e.disbursement_status],
@@ -1965,10 +2039,17 @@ Modals.viewAudit = function(kind, custodyId, recordId){
       ['عدد مرات الطباعة', c.Print_Count || 0],
     ];
   }
-  const bodyHTML = `<div class="kv-grid">${rows.map(r=>`<div><div class="kv-lbl">${esc(r[0])}</div><div class="kv-val">${esc(String(r[1]))}</div></div>`).join('')}</div>`;
+  const locRow = rows.find(r=>r[2]==='link' && r[1] && /^https?:\/\//.test(r[1]));
+  const bodyHTML = `<div class="kv-grid">${rows.map(r=>{
+    if(r[2]==='link' && r[1] && /^https?:\/\//.test(r[1])){
+      return `<div><div class="kv-lbl">${esc(r[0])}</div><div class="kv-val"><a href="${esc(r[1])}" target="_blank" style="color:var(--teal);text-decoration:underline;">📍 فتح الموقع على الخريطة</a></div></div>`;
+    }
+    return `<div><div class="kv-lbl">${esc(r[0])}</div><div class="kv-val">${esc(String(r[1]))}</div></div>`;
+  }).join('')}</div>`;
   const attachBtn = filePath ? `<button class="btn btn-outline" onclick="viewAttachment('${esc(filePath)}')">📎 عرض المرفق</button>` : '';
+  const locBtn = locRow ? `<button class="btn btn-outline" onclick="window.open('${esc(locRow[1])}','_blank')">📍 عرض الموقع</button>` : '';
   openModalHTML(modalShell('auditModal', title, bodyHTML, false,
-    `${attachBtn}<button class="btn btn-outline" onclick="closeModal()">إغلاق</button>`));
+    `${locBtn}${attachBtn}<button class="btn btn-outline" onclick="closeModal()">إغلاق</button>`));
 };
 
 /* ============================= modal shell helper ============================= */
@@ -2092,12 +2173,13 @@ Actions.saveTransfer = async function(custodyId){
   const amt = Number(document.getElementById('trAmt').value);
   const cur = document.getElementById('trCur').value;
   const note = document.getElementById('trNote').value;
+  const fileInput = document.getElementById('trFile');
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   if(amt > f.pendingTransfer + 0.009){ toast('المبلغ يتجاوز المصاريف التقديرية المعتمدة','danger'); return; }
-  const fileInput = document.getElementById('trFile');
+  if(!fileInput || !fileInput.files || !fileInput.files[0]){ toast('يجب إرفاق صورة أو ملف PDF لإثبات التحويل','danger'); return; }
   const saveBtn = document.getElementById('trSaveBtn');
   let filePath = null;
-  if(fileInput && fileInput.files && fileInput.files[0]){
+  {
     if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جارٍ رفع المرفق…'; }
     const up = await apiUpload(fileInput.files[0], 'custody_transfers');
     if(up.error){ toast('تعذّر رفع المرفق: ' + up.error.message, 'danger'); if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='تنفيذ التحويل'; } return; }
@@ -2290,34 +2372,41 @@ Views.users = function(){
   const u = Session.user;
   const list = visibleUsers(u).slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
   const addBtn = Perm.canManageUsers(u) ? `<button class="btn btn-primary" onclick="Modals.addUser()">+ إضافة مستخدم</button>` : '';
-  const showFedCol = Perm.isAuditor(u);
+  const isAud = Perm.isAuditor(u);
 
-  const rows = list.length ? list.map(x=>{
-    const fed = federationById(x.federation_id);
-    const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
-    const canEdit = Perm.canEditUser(u, x);
-    const balance = userOpenBalance(x.user_id);
-    return `<tr>
-      <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
-      ${showFedCol?`<td>${esc(fed?fed.federation_name_ar:'—')}</td>`:''}
-      <td>${esc(x.user_type||'—')}</td>
-      <td>${esc(x.Job_Title||'—')}</td>
-      <td>${esc(x.phone||'—')}</td>
-      <td class="num">${money(balance)}</td>
-      <td>${userStatusBadge(x.user_status)}</td>
-      <td>
-        <div class="flex gap-8 center">
-        <button class="btn btn-ghost btn-sm" onclick="App.go('userDetail',{id:'${x.user_id}'})">عرض</button>
-        ${canEdit ? `<button class="btn btn-outline btn-sm" onclick="Modals.editUser('${x.user_id}')">تعديل</button>` : ''}
-        ${canChangeStatus ? `
-        <select onchange="Actions.changeUserStatus('${x.user_id}', this.value)" class="btn-sm" style="border:1px solid var(--line);border-radius:7px;padding:5px 8px;">
-          <option value="">تغيير الحالة…</option>
-          ${USER_STATUSES.filter(s=>s!==x.user_status).map(s=>`<option value="${s}">${s}</option>`).join('')}
-        </select>` : ''}
-        </div>
-      </td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="8"><div class="empty-row"><div class="ico">👥</div>لا يوجد مستخدمون بعد</div></td></tr>`;
+  function rowsFor(items){
+    return items.length ? items.map(x=>{
+      const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
+      const canEdit = Perm.canEditUser(u, x);
+      const balance = userOpenBalance(x.user_id);
+      return `<tr>
+        <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
+        <td>${esc(x.user_type||'—')}</td>
+        <td>${esc(x.Job_Title||'—')}</td>
+        <td>${esc(x.phone||'—')}</td>
+        <td class="num">${money(balance)}</td>
+        <td>${userStatusBadge(x.user_status)}</td>
+        <td>
+          <div class="flex gap-8 center">
+          <button class="btn btn-ghost btn-sm" onclick="App.go('userDetail',{id:'${x.user_id}'})">عرض</button>
+          ${canEdit ? `<button class="btn btn-outline btn-sm" onclick="Modals.editUser('${x.user_id}')">تعديل</button>` : ''}
+          ${canChangeStatus ? `
+          <select onchange="Actions.changeUserStatus('${x.user_id}', this.value)" class="btn-sm" style="border:1px solid var(--line);border-radius:7px;padding:5px 8px;">
+            <option value="">تغيير الحالة…</option>
+            ${USER_STATUSES.filter(s=>s!==x.user_status).map(s=>`<option value="${s}">${s}</option>`).join('')}
+          </select>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7"><div class="empty-row"><div class="ico">👥</div>لا يوجد مستخدمون بعد</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap">
+      <table class="tbl"><thead><tr>
+        <th>الاسم</th><th>نوع المستخدم</th><th>المسمى الوظيفي</th><th>الجوال</th><th>رصيد العهد المفتوحة</th><th>الحالة</th><th></th>
+      </tr></thead><tbody>${rowsFor(items)}</tbody></table>
+    </div>`;
+  }
 
   return `
     <div class="section-head">
@@ -2325,20 +2414,21 @@ Views.users = function(){
       ${addBtn}
     </div>
     <div class="alert alert-info">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم (تحويلهم إلى "مفتوح") إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
-    <div class="tbl-wrap mt-16">
-      <table class="tbl"><thead><tr>
-        <th>الاسم</th>${showFedCol?'<th>الاتحاد</th>':''}<th>نوع المستخدم</th><th>المسمى الوظيفي</th><th>الجوال</th><th>رصيد العهد المفتوحة</th><th>الحالة</th><th></th>
-      </tr></thead><tbody>${rows}</tbody></table>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor) : tableFor(list)}
     </div>
   `;
 };
 
 Modals.addUser = function(){
   const u = Session.user;
+  const isAud = Perm.isAuditor(u);
   const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
+  const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
     <div class="alert alert-info">سيُضاف هذا المستخدم بحالة "تحت المعالجة" لحين اعتماده من رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="form-grid mt-12">
+      ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي) <span class="muted">— إلزامي</span></label><input type="text" id="nuNameAr"></div>
       <div class="field"><label>الاسم (إنجليزي) <span class="muted">— إلزامي</span></label><input type="text" id="nuNameEn"></div>
       <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
@@ -2358,6 +2448,8 @@ Modals.addUser = function(){
 
 Actions.saveUser = async function(){
   const u = Session.user;
+  const isAud = Perm.isAuditor(u);
+  const federationId = isAud ? document.getElementById('nuFed').value : u.federation_id;
   const nameAr = document.getElementById('nuNameAr').value.trim();
   const nameEn = document.getElementById('nuNameEn').value.trim();
   const job = document.getElementById('nuJob').value.trim();
@@ -2366,12 +2458,13 @@ Actions.saveUser = async function(){
   const phone = document.getElementById('nuPhone').value.trim();
   const email = document.getElementById('nuEmail').value.trim();
   const nat = document.getElementById('nuNat').value.trim();
+  if(!federationId){ toast('اختر الاتحاد الذي يتبع له المستخدم','danger'); return; }
   if(!nameAr || !nameEn || !job || !username || !password || !phone || !email || !nat){
     toast('جميع الحقول إلزامية ما عدا رقم الهوية','danger'); return;
   }
   if(DB.users.some(x=>x.user_name===username)){ toast('اسم المستخدم مستخدم بالفعل','danger'); return; }
   const obj = {
-    user_id: uid('u'), federation_id: u.federation_id, user_status:'تحت المعالجة',
+    user_id: uid('u'), federation_id: federationId, user_status:'تحت المعالجة',
     employee_name_ar:nameAr, employee_name_en: nameEn,
     national_id: document.getElementById('nuNid').value.trim(), nationality: nat,
     phone: phone, email: email,
@@ -2451,14 +2544,10 @@ Actions.changeUserStatus = async function(userId, newStatus){
 Views.costCenters = function(){
   const u = Session.user;
   const list = visibleCostCenters(u);
-  const showFedCol = Perm.isAuditor(u);
+  const isAud = Perm.isAuditor(u);
   const addBtn = Perm.canManageCostCenters(u) ? `<button class="btn btn-primary" onclick="Modals.addCostCenter()">+ إضافة مركز فرعي</button>` : '';
 
-  const federationIds = showFedCol ? DB.federations.map(f=>f.federation_id) : [u.federation_id];
-  const groupsHTML = federationIds.map(fedId=>{
-    const fedList = list.filter(cc=>cc.federation_id===fedId);
-    if(!fedList.length) return '';
-    const fed = federationById(fedId);
+  function renderTreeForFedList(fedList){
     const mains = fedList.filter(cc=>!cc.parent_cost_center_id)
       .sort((a,b)=> MAIN_COST_CENTERS.indexOf(a.cost_center_name_ar) - MAIN_COST_CENTERS.indexOf(b.cost_center_name_ar));
     const treeHTML = mains.map(m=>{
@@ -2481,11 +2570,12 @@ Views.costCenters = function(){
           <div class="cc-children">${subsHTML}</div>
         </div>`;
     }).join('');
-    return `
-      ${showFedCol ? `<div class="eyebrow mt-16">${esc(fed?fed.federation_name_ar:'')}</div>` : ''}
-      <div class="cc-forest mt-8">${treeHTML}</div>
-    `;
-  }).join('');
+    return `<div class="cc-forest mt-8">${treeHTML}</div>`;
+  }
+
+  const bodyHTML = isAud
+    ? renderFederationTree(list, cc=>cc.federation_id, renderTreeForFedList)
+    : renderTreeForFedList(list);
 
   return `
     <div class="section-head">
@@ -2493,7 +2583,7 @@ Views.costCenters = function(){
       ${addBtn}
     </div>
     <div class="alert alert-info">مراكز التكلفة الرئيسية السبعة ثابتة لكل الاتحادات (فني، تشغيلي، المعسكرات الداخلية، المعسكرات الخارجية، البطولات الداخلية، البطولات الخارجية، الأنشطة والمبادرات الأخرى). يمكن للمحاسب أو المدير التنفيذي أو رئيس الاتحاد إضافة مراكز فرعية تحتها فقط — لا يمكن إضافة مراكز رئيسية جديدة.</div>
-    ${groupsHTML || `<div class="empty-row"><div class="ico">🏷️</div>لا توجد مراكز تكلفة بعد</div>`}
+    ${list.length ? bodyHTML : `<div class="empty-row"><div class="ico">🏷️</div>لا توجد مراكز تكلفة بعد</div>`}
   `;
 };
 
@@ -2579,12 +2669,16 @@ Actions.saveExpenseType = async function(){
 /* ============================= Federations (auditor overview) ============================= */
 Views.federations = function(){
   const u = Session.user;
-  if(!Perm.isAuditor(u)) return `<div class="card card-pad">هذه الصفحة متاحة لصلاحية المراجع فقط.</div>`;
-  const cards = DB.federations.map(f=>{
+  const isAud = Perm.isAuditor(u);
+  const isTop = Perm.isTopApprover(u);
+  if(!isAud && !isTop) return `<div class="card card-pad">هذه الصفحة غير متاحة لصلاحيتك.</div>`;
+  const feds = isAud ? DB.federations : DB.federations.filter(f=>f.federation_id===u.federation_id);
+  const cards = feds.map(f=>{
     const custodies = DB.custodies.filter(c=>c.federation_id===f.federation_id);
     const users = DB.users.filter(x=>x.federation_id===f.federation_id);
-    let spent=0, budget=0;
-    custodies.forEach(c=>{ const fi=custodyFinancials(c); spent+=fi.approvedExpenses; budget+=fi.approvedBudget; });
+    const costCenters = DB.cost_centers.filter(x=>x.federation_id===f.federation_id);
+    let spent=0, budget=0, transferred=0;
+    custodies.forEach(c=>{ const fi=custodyFinancials(c); spent+=fi.approvedExpenses; budget+=fi.approvedBudget; transferred+=fi.totalTransferred; });
     return `
     <div class="card card-pad">
       <h3 style="margin:0 0 4px;">${esc(f.federation_name_ar)}</h3>
@@ -2592,13 +2686,17 @@ Views.federations = function(){
       <div class="kv-grid">
         <div><div class="kv-lbl">عدد العهد</div><div class="kv-val">${custodies.length}</div></div>
         <div><div class="kv-lbl">عدد المستخدمين</div><div class="kv-val">${users.length}</div></div>
+        <div><div class="kv-lbl">عدد مراكز التكلفة</div><div class="kv-val">${costCenters.length}</div></div>
         <div><div class="kv-lbl">الميزانية المعتمدة</div><div class="kv-val num">${money(budget)}</div></div>
+        <div><div class="kv-lbl">إجمالي المحوّل</div><div class="kv-val num">${money(transferred)}</div></div>
         <div><div class="kv-lbl">المصروف الفعلي</div><div class="kv-val num">${money(spent)}</div></div>
+        <div><div class="kv-lbl">تاريخ الإنشاء</div><div class="kv-val">${fmtDate(f.created_at)}</div></div>
       </div>
+      ${isTop ? `<div class="alert alert-info mt-16" style="margin-bottom:0;">هذه بيانات الاتحاد للعرض فقط ولا يمكن تعديلها من داخل النظام.</div>` : ''}
     </div>`;
   }).join('');
   return `
-    <div class="section-head"><div><div class="eyebrow">صلاحية المراجع</div><h2>الاتحادات</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">${isAud?'صلاحية المراجع':'نظرة عامة'}</div><h2>${isAud?'الاتحادات':'بيانات الاتحاد'}</h2></div></div>
     <div class="custody-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));">${cards}</div>
   `;
 };
