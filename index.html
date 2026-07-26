@@ -133,6 +133,9 @@ a{color:inherit;}
   transition:border-color .15s;
 }
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--teal);background:#fff;}
+.field input[type="file"]{padding:8px;background:var(--paper);border:1.5px dashed var(--line);cursor:pointer;}
+.field input[type="file"]::file-selector-button{background:var(--teal);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;font-size:12px;margin-left:8px;cursor:pointer;}
+.field input[type="file"]::file-selector-button:hover{background:var(--teal-dark);}
 .field .hint{font-size:11.5px;color:var(--muted);margin-top:5px;}
 .upload-drop{
   border:2px dashed var(--line);border-radius:14px;padding:34px 20px;text-align:center;
@@ -644,6 +647,32 @@ async function apiCall(body){
 /* جدول القراءة لـ users يذهب دائمًا عبر "users_public" (بدون كلمة المرور) */
 const READ_SOURCE = { users: 'users_public' };
 function readSource(table){ return READ_SOURCE[table] || table; }
+
+/* ---------------------------- Attachments (upload / view) ---------------------------- */
+async function apiUpload(file, folder){
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('folder', folder);
+  let res;
+  try{
+    res = await fetch('/api/upload', { method:'POST', body: fd });
+  }catch(e){
+    return { data:null, error:{ message:'تعذّر رفع الملف — تحقق من اتصالك بالإنترنت.' } };
+  }
+  try{ return await res.json(); }
+  catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة أثناء رفع الملف' } }; }
+}
+async function viewAttachment(filePath){
+  if(!filePath){ toast('لا يوجد مرفق لهذا السجل','danger'); return; }
+  let res;
+  try{
+    res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: filePath }) });
+  }catch(e){ toast('تعذّر الاتصال بالخادم','danger'); return; }
+  let json;
+  try{ json = await res.json(); } catch(e){ toast('استجابة غير متوقعة من الخادم','danger'); return; }
+  if(json.error){ toast('تعذّر فتح المرفق: ' + json.error.message, 'danger'); return; }
+  window.open(json.data.url, '_blank');
+}
 
 /* ---------------------------- Bulk load ---------------------------- */
 async function loadAllData(){
@@ -1676,10 +1705,11 @@ Modals.addTransfer = function(custodyId){
     <div class="field mt-12"><label>المبلغ المراد تحويله</label><input type="number" id="trAmt" min="0" max="${f.pendingTransfer}" step="0.01" value="${f.pendingTransfer}"></div>
     <div class="field"><label>العملة</label><select id="trCur">${CURRENCIES.map(cu=>`<option ${cu==='SAR'?'selected':''}>${cu}</option>`).join('')}</select></div>
     <div class="field full"><label>بيان التحويل</label><input type="text" id="trNote" placeholder="مثال: تحويل الدفعة الأولى"></div>
+    <div class="field full"><label>مرفق (صورة أو PDF) <span class="muted">— اختياري</span></label><input type="file" id="trFile" accept="image/*,.pdf"></div>
   `;
   openModalHTML(modalShell('addTransferModal','تحويل رصيد للعهدة', body, false,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
-     <button class="btn btn-gold" onclick="Actions.saveTransfer('${custodyId}')">تنفيذ التحويل</button>`));
+     <button class="btn btn-gold" id="trSaveBtn" onclick="Actions.saveTransfer('${custodyId}')">تنفيذ التحويل</button>`));
 };
 
 /* ============================= Add expense ============================= */
@@ -1699,11 +1729,12 @@ Modals.addExpense = function(custodyId){
       <div class="field"><label>العملة</label><select id="exCur">${CURRENCIES.map(cu=>`<option ${cu==='SAR'?'selected':''}>${cu}</option>`).join('')}</select></div>
       <div class="field full"><label>البيان</label><input type="text" id="exNote" placeholder="وصف مختصر للمصروف"></div>
       <div class="field full"><label>موقع/جهة الصرف <span class="muted">— اختياري</span></label><input type="text" id="exLoc"></div>
+      <div class="field full"><label>مرفق (فاتورة/إيصال — صورة أو PDF) <span class="muted">— اختياري</span></label><input type="file" id="exFile" accept="image/*,.pdf"></div>
     </div>
   `;
   openModalHTML(modalShell('addExpenseModal','تسجيل مصروف فعلي', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
-     <button class="btn btn-primary" onclick="Actions.saveExpense('${custodyId}')">حفظ المصروف</button>`));
+     <button class="btn btn-primary" id="exSaveBtn" onclick="Actions.saveExpense('${custodyId}')">حفظ المصروف</button>`));
 };
 
 /* ============================= Edit budget line (while pending) ============================= */
@@ -1743,6 +1774,12 @@ Modals.editExpense = function(custodyId, closureId){
       <div class="field"><label>العملة</label><select id="eeCur">${CURRENCIES.map(cu=>`<option ${e.currency===cu?'selected':(cu==='SAR'&&!e.currency?'selected':'')}>${cu}</option>`).join('')}</select></div>
       <div class="field full"><label>البيان</label><input type="text" id="eeNote" value="${esc(e.statement||'')}"></div>
       <div class="field full"><label>موقع/جهة الصرف <span class="muted">— اختياري</span></label><input type="text" id="eeLoc" value="${esc(e.entry_location||'')}"></div>
+      <div class="field full">
+        <label>المرفق</label>
+        ${e.file ? `<button type="button" class="btn btn-outline btn-sm" onclick="viewAttachment('${esc(e.file)}')">📎 عرض المرفق الحالي</button>` : `<div class="muted small">لا يوجد مرفق حاليًا</div>`}
+        <input type="file" id="eeFile" accept="image/*,.pdf" class="mt-8">
+        <div class="hint">اختر ملفًا جديدًا هنا لاستبدال المرفق الحالي، أو اتركه فارغًا للإبقاء عليه.</div>
+      </div>
     </div>
   `;
   openModalHTML(modalShell('editExpenseModal','تعديل مصروف فعلي', body, true,
@@ -1814,6 +1851,7 @@ Modals.viewAudit = function(kind, custodyId, recordId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   let rows = [];
   let title = 'تفاصيل السجل';
+  let filePath = null;
   if(kind==='budget'){
     const b = DB.custody_budgets.find(x=>x.budget_id===recordId);
     title = 'تفاصيل بند مصروف تقديري';
@@ -1831,6 +1869,7 @@ Modals.viewAudit = function(kind, custodyId, recordId){
   } else if(kind==='transfer'){
     const t = DB.custody_transfers.find(x=>x.transfer_id===recordId);
     title = 'تفاصيل التحويل';
+    filePath = t.file || null;
     rows = [
       ['العهدة', c ? c.description_ar : '—'],
       ['البيان', t.statement || '—'],
@@ -1842,6 +1881,7 @@ Modals.viewAudit = function(kind, custodyId, recordId){
   } else if(kind==='expense'){
     const e = DB.custody_closures.find(x=>x.closure_id===recordId);
     title = 'تفاصيل المصروف الفعلي';
+    filePath = e.file || null;
     rows = [
       ['العهدة', c ? c.description_ar : '—'],
       ['نوع المصروف', expenseTypeLabel(e.expense_type_id)],
@@ -1871,8 +1911,9 @@ Modals.viewAudit = function(kind, custodyId, recordId){
     ];
   }
   const bodyHTML = `<div class="kv-grid">${rows.map(r=>`<div><div class="kv-lbl">${esc(r[0])}</div><div class="kv-val">${esc(String(r[1]))}</div></div>`).join('')}</div>`;
+  const attachBtn = filePath ? `<button class="btn btn-outline" onclick="viewAttachment('${esc(filePath)}')">📎 عرض المرفق</button>` : '';
   openModalHTML(modalShell('auditModal', title, bodyHTML, false,
-    `<button class="btn btn-outline" onclick="closeModal()">إغلاق</button>`));
+    `${attachBtn}<button class="btn btn-outline" onclick="closeModal()">إغلاق</button>`));
 };
 
 /* ============================= modal shell helper ============================= */
@@ -1994,10 +2035,20 @@ Actions.saveTransfer = async function(custodyId){
   const note = document.getElementById('trNote').value;
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   if(amt > f.pendingTransfer + 0.009){ toast('المبلغ يتجاوز المصاريف التقديرية المعتمدة','danger'); return; }
+  const fileInput = document.getElementById('trFile');
+  const saveBtn = document.getElementById('trSaveBtn');
+  let filePath = null;
+  if(fileInput && fileInput.files && fileInput.files[0]){
+    if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جارٍ رفع المرفق…'; }
+    const up = await apiUpload(fileInput.files[0], 'custody_transfers');
+    if(up.error){ toast('تعذّر رفع المرفق: ' + up.error.message, 'danger'); if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='تنفيذ التحويل'; } return; }
+    filePath = up.data.path;
+    if(saveBtn){ saveBtn.textContent = 'جارٍ الحفظ…'; }
+  }
   const saved = await dbInsert('custody_transfers', {
     transfer_id: uid('trf'), federation_id:c.federation_id, transfer_status:'مكتمل', user_id:c.received_by_user_id,
     custody_id: custodyId, statement: note, currency:cur, foreign_amount: cur==='SAR'?null:amt, exchange_rate: 1,
-    amount: amt, file:null, created_at: nowISO(), created_by: u.user_id, approved_by:u.user_id, approved_at: nowISO()
+    amount: amt, file: filePath, created_at: nowISO(), created_by: u.user_id, approved_by:u.user_id, approved_at: nowISO()
   });
   if(!saved) return;
   const newBalance = Number(c.Custody_balance||0) + amt;
@@ -2023,10 +2074,20 @@ Actions.saveExpense = async function(custodyId){
   const loc = document.getElementById('exLoc').value;
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   if(amt > f.remainingBalance + 0.009){ toast('المبلغ يتجاوز الرصيد المتاح بالعهدة ('+money(f.remainingBalance)+')','danger'); return; }
+  const fileInput = document.getElementById('exFile');
+  const saveBtn = document.getElementById('exSaveBtn');
+  let filePath = null;
+  if(fileInput && fileInput.files && fileInput.files[0]){
+    if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'جارٍ رفع المرفق…'; }
+    const up = await apiUpload(fileInput.files[0], 'custody_closures');
+    if(up.error){ toast('تعذّر رفع المرفق: ' + up.error.message, 'danger'); if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='حفظ المصروف'; } return; }
+    filePath = up.data.path;
+    if(saveBtn){ saveBtn.textContent = 'جارٍ الحفظ…'; }
+  }
   const saved = await dbInsert('custody_closures', {
     closure_id: uid('exp'), federation_id:c.federation_id, disbursement_status:'غير معتمد', user_id:c.received_by_user_id,
     custody_id: custodyId, expense_type_id: et, cost_center_id: cc, statement: note, currency:cur,
-    foreign_amount: cur==='SAR'?null:amt, exchange_rate:1, amount: amt, file:null, entry_location: loc,
+    foreign_amount: cur==='SAR'?null:amt, exchange_rate:1, amount: amt, file: filePath, entry_location: loc,
     created_by: u.user_id, created_at: nowISO(), approved_by:null, approved_at:null
   });
   if(!saved) return;
@@ -2111,11 +2172,17 @@ Actions.updateExpense = async function(custodyId, closureId){
   const amt = Number(document.getElementById('eeAmt').value);
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   if(amt > maxAllowed + 0.009){ toast('المبلغ يتجاوز الحد المسموح ('+money(maxAllowed)+')','danger'); return; }
+  const fileInput = document.getElementById('eeFile');
   const patch = {
     expense_type_id: document.getElementById('eeEt').value, cost_center_id: document.getElementById('eeCc').value,
     amount: amt, currency: document.getElementById('eeCur').value,
     statement: document.getElementById('eeNote').value, entry_location: document.getElementById('eeLoc').value
   };
+  if(fileInput && fileInput.files && fileInput.files[0]){
+    const up = await apiUpload(fileInput.files[0], 'custody_closures');
+    if(up.error){ toast('تعذّر رفع المرفق: ' + up.error.message, 'danger'); return; }
+    patch.file = up.data.path;
+  }
   const saved = await dbUpdate('custody_closures','closure_id',closureId, patch);
   if(!saved) return;
   closeModal();
