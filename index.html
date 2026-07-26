@@ -1728,13 +1728,41 @@ Modals.addExpense = function(custodyId){
       <div class="field"><label>المبلغ</label><input type="number" id="exAmt" min="0" max="${f.remainingBalance}" step="0.01"></div>
       <div class="field"><label>العملة</label><select id="exCur">${CURRENCIES.map(cu=>`<option ${cu==='SAR'?'selected':''}>${cu}</option>`).join('')}</select></div>
       <div class="field full"><label>البيان</label><input type="text" id="exNote" placeholder="وصف مختصر للمصروف"></div>
-      <div class="field full"><label>موقع/جهة الصرف <span class="muted">— اختياري</span></label><input type="text" id="exLoc"></div>
+      <div class="field full"><label>موقع/جهة الصرف <span class="muted">— يُحدَّد تلقائيًا عبر موقع جهازك</span></label>
+        <input type="text" id="exLoc" readonly placeholder="جارٍ تحديد الموقع…" style="background:var(--line-soft);cursor:not-allowed;">
+      </div>
       <div class="field full"><label>مرفق (فاتورة/إيصال — صورة أو PDF) <span class="muted">— اختياري</span></label><input type="file" id="exFile" accept="image/*,.pdf"></div>
     </div>
   `;
   openModalHTML(modalShell('addExpenseModal','تسجيل مصروف فعلي', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" id="exSaveBtn" onclick="Actions.saveExpense('${custodyId}')">حفظ المصروف</button>`));
+  captureLocationInto('exLoc');
+};
+
+/* التقاط موقع الجهاز تلقائيًا عبر متصفح المستخدم ووضعه في حقل نصي للقراءة فقط */
+function captureLocationInto(fieldId){
+  const el = document.getElementById(fieldId);
+  if(!el) return;
+  if(!navigator.geolocation){
+    el.value = 'تحديد الموقع غير مدعوم في هذا المتصفح';
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    function(pos){
+      const el2 = document.getElementById(fieldId);
+      if(!el2) return; // قد تكون النافذة أُغلقت قبل استجابة المتصفح
+      const lat = pos.coords.latitude.toFixed(6);
+      const lng = pos.coords.longitude.toFixed(6);
+      el2.value = `https://www.google.com/maps?q=${lat},${lng}`;
+    },
+    function(){
+      const el2 = document.getElementById(fieldId);
+      if(!el2) return;
+      el2.value = 'تعذّر تحديد الموقع — تأكد من السماح للمتصفح بالوصول لموقعك';
+    },
+    { enableHighAccuracy:true, timeout:10000, maximumAge:60000 }
+  );
 };
 
 /* ============================= Edit budget line (while pending) ============================= */
@@ -1773,7 +1801,7 @@ Modals.editExpense = function(custodyId, closureId){
       <div class="field"><label>المبلغ</label><input type="number" id="eeAmt" min="0" max="${maxAllowed}" step="0.01" value="${e.amount}"></div>
       <div class="field"><label>العملة</label><select id="eeCur">${CURRENCIES.map(cu=>`<option ${e.currency===cu?'selected':(cu==='SAR'&&!e.currency?'selected':'')}>${cu}</option>`).join('')}</select></div>
       <div class="field full"><label>البيان</label><input type="text" id="eeNote" value="${esc(e.statement||'')}"></div>
-      <div class="field full"><label>موقع/جهة الصرف <span class="muted">— اختياري</span></label><input type="text" id="eeLoc" value="${esc(e.entry_location||'')}"></div>
+      <div class="field full"><label>موقع/جهة الصرف <span class="muted">— محدَّد تلقائيًا، غير قابل للتعديل</span></label><input type="text" id="eeLoc" value="${esc(e.entry_location||'')}" readonly style="background:var(--line-soft);cursor:not-allowed;"></div>
       <div class="field full">
         <label>المرفق</label>
         ${e.file ? `<button type="button" class="btn btn-outline btn-sm" onclick="viewAttachment('${esc(e.file)}')">📎 عرض المرفق الحالي</button>` : `<div class="muted small">لا يوجد مرفق حاليًا</div>`}
