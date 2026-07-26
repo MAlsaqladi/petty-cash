@@ -255,17 +255,25 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .cc-pick-row:hover{background:var(--teal-soft);}
 .cc-pick-row input{width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;}
 .cc-pick-main{font-weight:800;background:var(--paper);}
+.cc-pick-header{cursor:default;}
+.cc-pick-header:hover{background:var(--paper);}
+.cc-pick-empty{cursor:default;color:var(--muted);font-size:12px;}
+.cc-pick-empty:hover{background:var(--panel);}
 .cc-pick-sub{padding-right:34px;color:var(--ink-2);}
 
 /* ---------- Cost center tree ---------- */
 .cc-forest{display:flex;flex-direction:column;gap:10px;}
 .cc-tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
 .cc-node{display:flex;align-items:center;gap:10px;padding:12px 16px;}
-.cc-main{background:var(--paper);font-size:13.5px;}
+.cc-main{background:var(--paper);font-size:13.5px;cursor:pointer;user-select:none;}
+.cc-main:hover{background:var(--teal-soft);}
 .cc-main .cc-ico{font-size:15px;}
+.cc-caret{display:inline-block;font-size:11px;color:var(--muted);transition:transform .15s;width:10px;}
+.cc-main.cc-open .cc-caret{transform:rotate(90deg);}
 .cc-node .cc-name{flex:1;}
 .cc-node .cc-spent{font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink-2);}
-.cc-children{padding:4px 0 8px;border-right:1.5px solid var(--line);margin-right:26px;}
+.cc-children{padding:4px 0 8px;border-right:1.5px solid var(--line);margin-right:26px;display:none;}
+.cc-children.cc-open{display:block;}
 .cc-sub{position:relative;padding-right:22px;font-size:12.5px;margin-right:-1.5px;}
 .cc-sub .cc-connector{position:absolute;right:0;top:0;width:16px;height:19px;border-bottom:1.5px solid var(--line);}
 .cc-empty{color:var(--muted);}
@@ -568,6 +576,32 @@ function isOverdue(c){
   return d.getTime() < Date.now();
 }
 
+/* ---------------------------- Per-user custody summary ---------------------------- */
+function userOpenBalance(userId){
+  return DB.custodies.filter(c=>c.received_by_user_id===userId && c.custody_status==='مفتوحة')
+    .reduce((s,c)=> s + custodyFinancials(c).remainingBalance, 0);
+}
+function userCustodySummary(userId){
+  const custodies = DB.custodies.filter(c=>c.received_by_user_id===userId)
+    .slice().sort((a,b)=> new Date(b.created_at||0) - new Date(a.created_at||0));
+  let approvedBudget=0, approvedExpenses=0, remainingBalance=0, openCount=0, closedCount=0, pendingCount=0;
+  const ccUsage = {}; // cost_center_id -> amount
+  custodies.forEach(c=>{
+    const f = custodyFinancials(c);
+    approvedBudget += f.approvedBudget;
+    approvedExpenses += f.approvedExpenses;
+    if(c.custody_status==='مفتوحة'){ remainingBalance += f.remainingBalance; openCount++; }
+    else if(c.custody_status==='مغلقة') closedCount++;
+    else if(c.custody_status==='قيد الاعتماد') pendingCount++;
+    f.expenses.filter(e=>e.disbursement_status==='معتمد').forEach(e=>{
+      ccUsage[e.cost_center_id] = (ccUsage[e.cost_center_id]||0) + Number(e.amount||0);
+    });
+  });
+  const costCentersUsed = Object.keys(ccUsage).map(id=>({ id, name: costCenterLabel(id), amount: ccUsage[id] }))
+    .sort((a,b)=> b.amount - a.amount);
+  return { custodies, approvedBudget, approvedExpenses, remainingBalance, openCount, closedCount, pendingCount, costCentersUsed };
+}
+
 /* ---------------------------- Badge helpers ---------------------------- */
 function userStatusBadge(s){
   const map = {'مفتوح':'success','مغلق':'muted','تحت المعالجة':'warning','مسودة':'muted'};
@@ -842,6 +876,7 @@ const VIEW_TITLES = {
   transferslist:{title:'التحويلات', crumb:'كل التحويلات إلى العهد'},
   expenseslist:{title:'المصاريف الفعلية', crumb:'كل المصاريف الفعلية المسجّلة عبر العهد'},
   users:{title:'المستخدمون', crumb:'إدارة حسابات وصلاحيات المستخدمين'},
+  userDetail:{title:'تفاصيل المستخدم', crumb:'العهد والمصاريف الخاصة بهذا المستخدم'},
   costcenters:{title:'مراكز التكلفة', crumb:'مراكز التكلفة الخاصة بكل اتحاد'},
   expensetypes:{title:'أنواع المصاريف', crumb:'قائمة موحّدة لجميع الاتحادات'},
   federations:{title:'الاتحادات', crumb:'عرض شامل لكل الاتحادات (صلاحية المراجع)'},
@@ -869,6 +904,7 @@ App.render = function(){
   else if(v==='transferslist') view.innerHTML = Views.transfersList();
   else if(v==='expenseslist') view.innerHTML = Views.expensesList();
   else if(v==='users') view.innerHTML = Views.users();
+  else if(v==='userDetail') view.innerHTML = Views.userDetail(Session.params.id);
   else if(v==='costcenters') view.innerHTML = Views.costCenters();
   else if(v==='expensetypes') view.innerHTML = Views.expenseTypes();
   else if(v==='federations') view.innerHTML = Views.federations();
@@ -1530,15 +1566,14 @@ function renderCCRows(fedCC, selected, query){
     const mainMatches = !q || m.cost_center_name_ar.toLowerCase().includes(q);
     const matchingSubs = subs.filter(s=> !q || mainMatches || s.cost_center_name_ar.toLowerCase().includes(q));
     if(q && !mainMatches && matchingSubs.length===0) return '';
-    const mainRow = `<label class="cc-pick-row cc-pick-main">
-        <input type="checkbox" ${selected.includes(m.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${m.cost_center_id}')">
-        <span>${esc(m.cost_center_name_ar)}</span>
-      </label>`;
-    const subRows = matchingSubs.map(s=>`<label class="cc-pick-row cc-pick-sub">
-        <input type="checkbox" ${selected.includes(s.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${s.cost_center_id}')">
-        <span>${esc(s.cost_center_name_ar)}</span>
-      </label>`).join('');
-    return mainRow + subRows;
+    const headerRow = `<div class="cc-pick-row cc-pick-main cc-pick-header"><span>${esc(m.cost_center_name_ar)}</span></div>`;
+    const subRows = matchingSubs.length
+      ? matchingSubs.map(s=>`<label class="cc-pick-row cc-pick-sub">
+          <input type="checkbox" ${selected.includes(s.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${s.cost_center_id}')">
+          <span>${esc(s.cost_center_name_ar)}</span>
+        </label>`).join('')
+      : `<div class="cc-pick-row cc-pick-sub cc-pick-empty">لا توجد مراكز فرعية بعد — أضفها من صفحة مراكز التكلفة</div>`;
+    return headerRow + subRows;
   }).join('');
   return rows || `<div class="muted small" style="padding:12px;">لا نتائج مطابقة لبحثك</div>`;
 }
@@ -2130,15 +2165,18 @@ Views.users = function(){
     const fed = federationById(x.federation_id);
     const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
     const canEdit = Perm.canEditUser(u, x);
+    const balance = userOpenBalance(x.user_id);
     return `<tr>
-      <td><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
+      <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
       ${showFedCol?`<td>${esc(fed?fed.federation_name_ar:'—')}</td>`:''}
       <td>${esc(x.user_type||'—')}</td>
       <td>${esc(x.Job_Title||'—')}</td>
       <td>${esc(x.phone||'—')}</td>
+      <td class="num">${money(balance)}</td>
       <td>${userStatusBadge(x.user_status)}</td>
       <td>
         <div class="flex gap-8 center">
+        <button class="btn btn-ghost btn-sm" onclick="App.go('userDetail',{id:'${x.user_id}'})">عرض</button>
         ${canEdit ? `<button class="btn btn-outline btn-sm" onclick="Modals.editUser('${x.user_id}')">تعديل</button>` : ''}
         ${canChangeStatus ? `
         <select onchange="Actions.changeUserStatus('${x.user_id}', this.value)" class="btn-sm" style="border:1px solid var(--line);border-radius:7px;padding:5px 8px;">
@@ -2148,7 +2186,7 @@ Views.users = function(){
         </div>
       </td>
     </tr>`;
-  }).join('') : `<tr><td colspan="7"><div class="empty-row"><div class="ico">👥</div>لا يوجد مستخدمون بعد</div></td></tr>`;
+  }).join('') : `<tr><td colspan="8"><div class="empty-row"><div class="ico">👥</div>لا يوجد مستخدمون بعد</div></td></tr>`;
 
   return `
     <div class="section-head">
@@ -2158,7 +2196,7 @@ Views.users = function(){
     <div class="alert alert-info">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم (تحويلهم إلى "مفتوح") إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="tbl-wrap mt-16">
       <table class="tbl"><thead><tr>
-        <th>الاسم</th>${showFedCol?'<th>الاتحاد</th>':''}<th>نوع المستخدم</th><th>المسمى الوظيفي</th><th>الجوال</th><th>الحالة</th><th></th>
+        <th>الاسم</th>${showFedCol?'<th>الاتحاد</th>':''}<th>نوع المستخدم</th><th>المسمى الوظيفي</th><th>الجوال</th><th>رصيد العهد المفتوحة</th><th>الحالة</th><th></th>
       </tr></thead><tbody>${rows}</tbody></table>
     </div>
   `;
@@ -2296,7 +2334,8 @@ Views.costCenters = function(){
         </div>`).join('') : `<div class="cc-node cc-sub cc-last cc-empty"><span class="cc-connector"></span><span class="muted small">لا توجد مراكز فرعية</span></div>`;
       return `
         <div class="cc-tree">
-          <div class="cc-node cc-main">
+          <div class="cc-node cc-main" onclick="this.classList.toggle('cc-open');this.nextElementSibling.classList.toggle('cc-open')">
+            <span class="cc-caret">▸</span>
             <span class="cc-ico">🏷️</span>
             <span class="cc-name"><b>${esc(m.cost_center_name_ar)}</b></span>
             <span class="cc-spent"><b>${money(spentMain)}</b></span>
@@ -2459,6 +2498,7 @@ Views.profile = function(){
       <button class="btn btn-primary" onclick="Actions.changePassword()">حفظ كلمة المرور</button>
       <div id="pwAlert"></div>
     </div>
+    <div class="mt-24">${renderUserCustodyPanel(u.user_id)}</div>
   `;
 };
 Actions.changePassword = async function(){
@@ -2476,6 +2516,78 @@ Actions.changePassword = async function(){
   alertEl.innerHTML = `<div class="alert alert-success mt-12">تم تحديث كلمة المرور بنجاح</div>`;
   toast('تم تحديث كلمة المرور','success');
 };
+
+/* ============================= User detail (custody stats for a specific user) ============================= */
+Views.userDetail = function(userId){
+  const u = Session.user;
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!target) return `<div class="card card-pad">لم يتم العثور على المستخدم.</div>`;
+  const canSee = Perm.isAuditor(u) || target.federation_id===u.federation_id;
+  if(!canSee) return `<div class="card card-pad">لا تملك صلاحية عرض بيانات هذا المستخدم.</div>`;
+  const fed = federationById(target.federation_id);
+  return `
+    <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
+    <div class="card card-pad mt-8">
+      <div class="flex center gap-16">
+        <div class="sb-avatar" style="width:56px;height:56px;border-radius:50%;background:var(--teal-soft);color:var(--teal-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;">${esc((target.employee_name_ar||'?').trim()[0]||'?')}</div>
+        <div>
+          <h2 style="margin:0;">${esc(target.employee_name_ar)}</h2>
+          <div class="muted small">${esc(target.Job_Title||target.user_type)} · ${esc(fed?fed.federation_name_ar:'—')}</div>
+        </div>
+        <div style="margin-inline-start:auto;">${userStatusBadge(target.user_status)}</div>
+      </div>
+      <div class="kv-grid mt-16">
+        <div><div class="kv-lbl">اسم المستخدم</div><div class="kv-val">${esc(target.user_name)}</div></div>
+        <div><div class="kv-lbl">الجوال</div><div class="kv-val">${esc(target.phone||'—')}</div></div>
+        <div><div class="kv-lbl">البريد الإلكتروني</div><div class="kv-val">${esc(target.email||'—')}</div></div>
+        <div><div class="kv-lbl">تاريخ الانضمام</div><div class="kv-val">${fmtDate(target.created_at)}</div></div>
+      </div>
+    </div>
+    <div class="mt-24">${renderUserCustodyPanel(userId)}</div>
+  `;
+};
+
+function renderUserCustodyPanel(userId){
+  const s = userCustodySummary(userId);
+  const stats = `
+  <div class="stats-grid">
+    <div class="stat-card accent-teal"><div class="lbl">عدد العهد</div><div class="val num">${s.custodies.length}</div>
+      <div class="sub">${s.openCount} مفتوحة · ${s.closedCount} مغلقة · ${s.pendingCount} قيد الاعتماد</div></div>
+    <div class="stat-card"><div class="lbl">إجمالي الميزانية المعتمدة</div><div class="val num">${money(s.approvedBudget)}</div></div>
+    <div class="stat-card accent-danger"><div class="lbl">إجمالي المصروف المعتمد</div><div class="val num">${money(s.approvedExpenses)}</div></div>
+    <div class="stat-card accent-gold"><div class="lbl">الرصيد المتبقي (العهد المفتوحة)</div><div class="val num">${money(s.remainingBalance)}</div></div>
+  </div>`;
+
+  const custodyRows = s.custodies.length ? s.custodies.map(c=>{
+    const f = custodyFinancials(c);
+    return `<tr class="clickable-row" onclick="App.go('custodyDetail',{id:'${c.custody_id}'})">
+      <td><b>${esc(c.description_ar||'بدون وصف')}</b></td>
+      <td>${custodyStatusBadge(c.custody_status)}</td>
+      <td class="num">${money(f.approvedBudget)}</td>
+      <td class="num">${money(f.approvedExpenses)}</td>
+      <td class="num">${money(f.remainingBalance)}</td>
+      <td>${fmtDate(c.created_at)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6"><div class="empty-row">لا توجد عهد لهذا المستخدم</div></td></tr>`;
+
+  const ccRows = s.costCentersUsed.length ? s.costCentersUsed.map(cc=>`
+    <tr><td>${esc(cc.name)}</td><td class="num">${money(cc.amount)}</td></tr>
+  `).join('') : `<tr><td colspan="2"><div class="empty-row">لا توجد مصاريف مسجّلة بعد</div></td></tr>`;
+
+  return `
+    <h3 class="block-title">العهد النقدية</h3>
+    ${stats}
+    <div class="tbl-wrap mt-16">
+      <table class="tbl"><thead><tr><th>العهدة</th><th>الحالة</th><th>الميزانية المعتمدة</th><th>المصروف المعتمد</th><th>الرصيد المتبقي</th><th>تاريخ الطلب</th></tr></thead>
+      <tbody>${custodyRows}</tbody></table>
+    </div>
+    <h3 class="block-title mt-24">مراكز التكلفة المستخدمة</h3>
+    <div class="tbl-wrap">
+      <table class="tbl"><thead><tr><th>مركز التكلفة</th><th>إجمالي المصروف</th></tr></thead>
+      <tbody>${ccRows}</tbody></table>
+    </div>
+  `;
+}
 (function guardActionsAgainstDoubleSubmit(){
   let busy = false;
   Object.keys(Actions).forEach(function(name){
