@@ -240,6 +240,15 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .clickable-row{cursor:pointer;}
 @media(max-width:960px){ .grid-2col{grid-template-columns:1fr;} }
 
+/* ---------- Cost center enum picker (add custody) ---------- */
+.cc-pick-list{border:1.5px solid var(--line);border-radius:10px;max-height:220px;overflow-y:auto;background:var(--paper);}
+.cc-pick-row{display:flex;align-items:center;gap:9px;padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line-soft);}
+.cc-pick-row:last-child{border-bottom:none;}
+.cc-pick-row:hover{background:var(--teal-soft);}
+.cc-pick-row input{width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;}
+.cc-pick-main{font-weight:800;background:var(--panel);}
+.cc-pick-sub{padding-right:34px;color:var(--ink-2);}
+
 /* ---------- Cost center tree ---------- */
 .cc-forest{display:flex;flex-direction:column;gap:10px;}
 .cc-tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
@@ -653,32 +662,32 @@ async function seedDefaultCostCenters(){
   }
 }
 
-async function bootstrapDemoUsersIfEmpty(){
-  if(DB.users.length>0) return null;
-  if(DB.federations.length===0) return null;
-  const created = [];
-  for(let i=0;i<DB.federations.length;i++){
-    const f = DB.federations[i];
-    const u = {
-      user_id: uid('u'), federation_id: f.federation_id, user_status:'مفتوح',
-      employee_name_ar: 'رئيس اتحاد تجريبي', employee_name_en:'Demo President',
-      national_id:'', nationality:'سعودي', phone:'', email:'',
-      user_name: 'admin'+(i+1), password: '123456',
-      user_type:'رئيس الاتحاد', Job_Title:'رئيس الاتحاد', language:'ar',
-      created_at: nowISO(), created_by:'system'
-    };
-    const saved = await dbInsertUser(u);
-    if(saved) created.push({fed:f.federation_name_ar, username:u.user_name, password:u.password});
-  }
-  return created;
-}
-
 /* ---------------------------- Excel export (backup / reporting only) ---------------------------- */
+function visibleDataForExport(){
+  const u = Session.user;
+  if(!u || Perm.isAuditor(u)){
+    // المراجع (أو حالة غير متوقعة) يرى كل شيء
+    return DB;
+  }
+  const custodies = visibleCustodies(u);
+  const custodyIds = new Set(custodies.map(c=>c.custody_id));
+  return {
+    federations: DB.federations.filter(f=>f.federation_id===u.federation_id),
+    users: visibleUsers(u),
+    cost_centers: visibleCostCenters(u),
+    expense_types: DB.expense_types, // موحّدة لكل الاتحادات، لا حاجة لتقييدها
+    custodies: custodies,
+    custody_budgets: DB.custody_budgets.filter(b=>custodyIds.has(b.custody_id)),
+    custody_transfers: DB.custody_transfers.filter(t=>custodyIds.has(t.custody_id)),
+    custody_closures: DB.custody_closures.filter(e=>custodyIds.has(e.custody_id)),
+  };
+}
 function exportWorkbook(){
+  const scoped = visibleDataForExport();
   const wb = XLSX.utils.book_new();
   Object.keys(SCHEMA).forEach(sheetName=>{
     const headers = SCHEMA[sheetName];
-    const rows = DB[sheetName].map(r=>{
+    const rows = (scoped[sheetName]||[]).map(r=>{
       const row = {};
       headers.forEach(h=>{ row[h] = (r[h]===undefined) ? null : r[h]; });
       return row;
@@ -702,8 +711,7 @@ async function bootApp(){
       return;
     }
     await seedDefaultCostCenters();
-    const created = await bootstrapDemoUsersIfEmpty();
-    App.showLogin(created);
+    App.showLogin(DB.users.length===0);
   }catch(err){
     console.error(err);
     statusEl.innerHTML = `<div class="alert alert-danger">تعذّر الاتصال بالخادم.<br><span class="small">${esc(err.message||'')}</span><br><br>تأكد من أن الخادم يعمل، ومن ضبط SUPABASE_URL و SUPABASE_SERVICE_KEY في متغيرات البيئة على Render.</div>`;
@@ -712,17 +720,15 @@ async function bootApp(){
 /* ============================= App object ============================= */
 const App = {};
 
-App.showLogin = function(bootstrapCreds){
+App.showLogin = function(noUsers){
   document.getElementById('screen-boot').classList.add('hidden');
   document.getElementById('screen-login').classList.remove('hidden');
   document.getElementById('loginAlert').innerHTML = '';
   const demoBox = document.getElementById('demoCreds');
-  if(bootstrapCreds && bootstrapCreds.length){
-    let rows = bootstrapCreds.map(c=>`<div class="row"><span>${esc(c.fed)}</span><b>${esc(c.username)} / ${esc(c.password)}</b></div>`).join('');
+  if(noUsers){
     demoBox.innerHTML = `<div class="demo-box">
-      <div style="font-weight:800;margin-bottom:6px;">⚠️ لا يوجد مستخدمون في قاعدة البيانات — تم إنشاء حسابات دخول أولية لكل اتحاد (رئيس اتحاد):</div>
-      ${rows}
-      <div class="mt-8 small muted">يمكنك تسجيل الدخول بأحدها ثم إنشاء بقية المستخدمين من داخل النظام.</div>
+      <div style="font-weight:800;margin-bottom:6px;">⚠️ لا يوجد مستخدمون في قاعدة البيانات بعد.</div>
+      <div class="small muted">أضف أول مستخدم (رئيس اتحاد) مباشرة من Supabase عبر SQL Editor أو Table Editor → جدول users. راجع تعليمات README لأمر SQL جاهز.</div>
     </div>`;
   } else {
     demoBox.innerHTML = '';
@@ -1039,6 +1045,7 @@ Views.dashboard = function(){
     {k:'قيد الاعتماد', l:'قيد الاعتماد'},
     {k:'مفتوحة', l:'مفتوحة'},
     {k:'مغلقة', l:'مغلقة'},
+    {k:'مرفوضة', l:'مرفوضة'},
   ];
   const tabsHTML = tabs.map(t=>`<button class="pill-tab ${DashState.statusFilter===t.k?'active':''}" onclick="Views.setDashFilter('${t.k}')">${t.l}</button>`).join('');
 
@@ -1144,7 +1151,9 @@ Views.budgetsList = function(){
     </tr>`;
   }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد بنود</div></td></tr>`;
   return `
-    <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div>
+      <button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>
+    </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th><th></th></tr></thead>
@@ -1180,7 +1189,9 @@ Views.transfersList = function(){
     </tr>`;
   }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد تحويلات</div></td></tr>`;
   return `
-    <div class="section-head"><div><div class="eyebrow">التحويلات</div><h2>التحويلات إلى العهد</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">التحويلات</div><h2>التحويلات إلى العهد</h2></div>
+      <button class="btn btn-gold" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>
+    </div>
     ${stats}
     <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>البيان</th><th>المبلغ</th><th>العملة</th><th>بواسطة</th><th>التاريخ</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table></div>
@@ -1225,7 +1236,9 @@ Views.expensesList = function(){
     </tr>`;
   }).join('') : `<tr><td colspan="8"><div class="empty-row">لا توجد مصاريف</div></td></tr>`;
   return `
-    <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div>
+      <button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>
+    </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>نوع المصروف</th><th>مركز التكلفة</th><th>البيان</th><th>المبلغ</th><th>الحالة</th><th>بواسطة</th><th></th></tr></thead>
@@ -1435,8 +1448,7 @@ Modals.renderAddCustodyBody = function(){
 
   const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}" ${d.received_by_user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
   const typeOpts = CUSTODY_TYPES.map(t=>`<option value="${esc(t)}" ${d.custody_type===t?'selected':''}>${esc(t)}</option>`).join('');
-  const ccChips = fedCC.length ? fedCC.map(cc=>`<span class="chip ${d.cost_centers.includes(cc.cost_center_id)?'on':''}" onclick="Modals.toggleDraftCC('${cc.cost_center_id}')">${esc(cc.cost_center_name_ar)}</span>`).join('')
-    : `<span class="muted small">لا توجد مراكز تكلفة لهذا الاتحاد بعد. أضف مراكز التكلفة أولاً من القائمة الجانبية.</span>`;
+  const ccPickerHTML = renderCostCenterPicker(fedCC, d.cost_centers);
 
   const linesHTML = renderBudgetLinesEditor();
 
@@ -1451,7 +1463,7 @@ Modals.renderAddCustodyBody = function(){
     <div class="field full"><label>تاريخ الإغلاق المتوقع <span class="muted">— اختياري</span></label><input type="date" value="${esc(d.Closing_date)}" oninput="CustodyDraft.Closing_date=this.value"></div>
     <div class="field full">
       <label>مراكز التكلفة (يمكن اختيار أكثر من واحد)</label>
-      <div class="chip-select">${ccChips}</div>
+      ${ccPickerHTML}
     </div>
   </div>
   <hr class="divider">
@@ -1459,6 +1471,27 @@ Modals.renderAddCustodyBody = function(){
   <div id="linesEditorWrap">${linesHTML}</div>
   `;
 };
+
+function renderCostCenterPicker(fedCC, selected){
+  if(!fedCC.length){
+    return `<div class="muted small">لا توجد مراكز تكلفة لهذا الاتحاد بعد. أضف مراكز التكلفة أولاً من القائمة الجانبية.</div>`;
+  }
+  const mains = fedCC.filter(cc=>!cc.parent_cost_center_id)
+    .sort((a,b)=> MAIN_COST_CENTERS.indexOf(a.cost_center_name_ar) - MAIN_COST_CENTERS.indexOf(b.cost_center_name_ar));
+  const rows = mains.map(m=>{
+    const subs = fedCC.filter(cc=>cc.parent_cost_center_id===m.cost_center_id);
+    const mainRow = `<label class="cc-pick-row cc-pick-main">
+        <input type="checkbox" ${selected.includes(m.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${m.cost_center_id}')">
+        <span>${esc(m.cost_center_name_ar)}</span>
+      </label>`;
+    const subRows = subs.map(s=>`<label class="cc-pick-row cc-pick-sub">
+        <input type="checkbox" ${selected.includes(s.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${s.cost_center_id}')">
+        <span>${esc(s.cost_center_name_ar)}</span>
+      </label>`).join('');
+    return mainRow + subRows;
+  }).join('');
+  return `<div class="cc-pick-list">${rows}</div>`;
+}
 
 Modals.toggleDraftCC = function(ccId){
   const i = CustodyDraft.cost_centers.indexOf(ccId);
@@ -1488,7 +1521,7 @@ function renderBudgetLinesEditor(){
   return `
     ${rows || `<div class="lines-empty">لا توجد بنود بعد — اضغط "إضافة بند" أدناه.</div>`}
     <button class="btn btn-outline btn-sm mt-8" onclick="Modals.addLine()">+ إضافة بند مصروف تقديري</button>
-    ${d.lines.length ? `<div class="mt-12 flex between" style="font-weight:800;"><span>الإجمالي التقديري</span><span class="num">${money(total)}</span></div>` : ''}
+    ${d.lines.length ? `<div class="mt-12 flex between" style="font-weight:800;"><span>الإجمالي التقديري</span><span class="num" id="linesTotalAmount">${money(total)}</span></div>` : ''}
   `;
 }
 
@@ -1500,8 +1533,15 @@ Modals.addLine = function(){
 };
 Modals.updateLine = function(idx, key, val){
   CustodyDraft.lines[idx][key] = val;
-  if(key!=='estimated_amount') return; // avoid full rerender losing focus on number typing except totals
-  refreshAddCustodyModal(true);
+  if(key!=='estimated_amount') { refreshAddCustodyModal(); return; }
+  // تحديث المجموع وحالة زر الحفظ فقط دون إعادة رسم الحقول (لتفادي فقدان التركيز أثناء الكتابة)
+  const totalEl = document.getElementById('linesTotalAmount');
+  if(totalEl){
+    const total = CustodyDraft.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
+    totalEl.textContent = money(total);
+  }
+  const saveBtn = document.getElementById('saveCustodyBtn');
+  if(saveBtn) saveBtn.disabled = CustodyDraft.lines.length===0 || CustodyDraft.lines.some(l=>!l.estimated_amount || Number(l.estimated_amount)<=0);
 };
 Modals.removeLine = function(idx){
   CustodyDraft.lines.splice(idx,1);
@@ -1511,13 +1551,7 @@ Modals.removeLine = function(idx){
 function refreshAddCustodyModal(quiet){
   const body = document.getElementById('addCustodyModalBody');
   if(!body) return;
-  if(quiet){
-    // just refresh the lines editor + save button state, not the whole form (keeps focus reasonable)
-    const linesWrap = document.getElementById('linesEditorWrap');
-    if(linesWrap) linesWrap.innerHTML = renderBudgetLinesEditor();
-  } else {
-    body.innerHTML = Modals.renderAddCustodyBody();
-  }
+  body.innerHTML = Modals.renderAddCustodyBody();
   const saveBtn = document.getElementById('saveCustodyBtn');
   if(saveBtn) saveBtn.disabled = CustodyDraft.lines.length===0 || CustodyDraft.lines.some(l=>!l.estimated_amount || Number(l.estimated_amount)<=0);
 }
@@ -2383,6 +2417,22 @@ Actions.changePassword = async function(){
   alertEl.innerHTML = `<div class="alert alert-success mt-12">تم تحديث كلمة المرور بنجاح</div>`;
   toast('تم تحديث كلمة المرور','success');
 };
+(function guardActionsAgainstDoubleSubmit(){
+  let busy = false;
+  Object.keys(Actions).forEach(function(name){
+    const orig = Actions[name];
+    Actions[name] = async function(...args){
+      if(busy){ return; }
+      busy = true;
+      try{
+        return await orig.apply(this, args);
+      } finally {
+        busy = false;
+      }
+    };
+  });
+})();
+
 document.addEventListener('DOMContentLoaded', function(){
   document.getElementById('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') App.login(); });
   document.getElementById('loginUser').addEventListener('keydown', function(e){ if(e.key==='Enter') App.login(); });
