@@ -211,6 +211,16 @@ grant select on users_public to service_role;
 grant execute on function login(text, text) to service_role;
 grant execute on function change_password(text, text, text) to service_role;
 
+-- ---------------------------------------------------------------------
+-- تخزين المرفقات (صور/ملفات PDF للتحويلات والمصاريف)
+-- ---------------------------------------------------------------------
+-- bucket خاص (غير عام) — الوصول إليه فقط عبر الخادم (service_role) الذي
+-- يولّد روابط مؤقتة صالحة لعدة دقائق عند الحاجة لعرض المرفق.
+insert into storage.buckets (id, name, public)
+values ('attachments', 'attachments', false)
+on conflict (id) do nothing;
+-- لا حاجة لأي سياسات إضافية على storage.objects لأن service_role يتجاوز RLS دائمًا.
+
 -- =====================================================================
 -- بيانات أولية اختيارية — عدّل الأسماء ثم شغّل الجزء التالي لإضافة أول اتحاد
 -- (يمكنك أيضًا تركه وسيقوم التطبيق نفسه بإرشادك لإنشاء أول حساب دخول تلقائيًا)
