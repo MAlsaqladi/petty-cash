@@ -269,9 +269,9 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .fed-group-head{display:flex;align-items:center;gap:10px;padding:13px 18px;background:var(--paper);cursor:pointer;user-select:none;font-weight:800;font-size:14px;}
 .fed-group-head:hover{background:var(--teal-soft);}
 .fed-group-head .fed-name{flex:1;}
-.fed-group-head.cc-open .cc-caret{transform:rotate(90deg);}
+.fed-group-head.fed-open .cc-caret{transform:rotate(90deg);}
 .fed-group-body{display:none;}
-.fed-group-body.cc-open{display:block;}
+.fed-group-body.fed-open{display:block;}
 .fed-group-body .tbl-wrap{border:none;border-radius:0;border-top:1px solid var(--line);}
 
 /* ---------- Cost center tree ---------- */
@@ -357,7 +357,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <!-- ============ SCREEN 1: BOOT / CONNECTING TO SUPABASE ============ -->
 <div id="screen-boot" class="stage">
   <div class="stage-card">
-    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
+    <div class="brandmark">ع.ن</div>
     <h1 class="stage-title">نظام إدارة العهد النقدية</h1>
     <p class="stage-sub">منصّة موحّدة لإدارة العهد النقدية والمصاريف عبر اتحادات متعددة.</p>
     <div class="card card-pad">
@@ -370,7 +370,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <!-- ============ SCREEN 2: LOGIN ============ -->
 <div id="screen-login" class="stage hidden">
   <div class="stage-card">
-    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
+    <div class="brandmark">ع.ن</div>
     <h1 class="stage-title">تسجيل الدخول</h1>
     <p class="stage-sub">أدخل بيانات حسابك للمتابعة.</p>
     <div class="card card-pad">
@@ -393,7 +393,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 <div id="app-shell" class="hidden">
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
-      <div class="mark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:9px;"></div>
+      <div class="mark">ع.ن</div>
       <div class="fed" id="sbFedName">—<small>نظام العهد النقدية</small></div>
     </div>
     <nav class="sb-nav" id="sbNav"></nav>
@@ -1023,12 +1023,12 @@ function renderFederationTree(items, getFedId, renderBodyFn){
   return fedIds.map(fid=>{
     const fed = federationById(fid);
     return `<div class="fed-group">
-      <div class="fed-group-head" onclick="this.classList.toggle('fed-open');this.nextElementSibling.classList.toggle('fed-open')">
+      <div class="fed-group-head fed-open" onclick="this.classList.toggle('fed-open');this.nextElementSibling.classList.toggle('fed-open')">
         <span class="cc-caret">▸</span>
         <span class="fed-name">🏛️ ${esc(fed?fed.federation_name_ar:'—')}</span>
         <span class="badge badge-muted">${groups[fid].length}</span>
       </div>
-      <div class="fed-group-body">${renderBodyFn(groups[fid])}</div>
+      <div class="fed-group-body fed-open">${renderBodyFn(groups[fid])}</div>
     </div>`;
   }).join('');
 }
@@ -1335,25 +1335,33 @@ Views.transfersList = function(){
   </div>`;
 
   list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
-  const rows = list.length ? list.map(t=>{
-    const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
-    return `<tr>
-      <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${t.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
-      <td>${esc(t.statement||'—')}</td>
-      <td class="num">${money(t.amount)}</td>
-      <td>${esc(t.currency||'SAR')}</td>
-      <td>${esc(userLabel(t.created_by))}</td>
-      <td>${fmtDateTime(t.created_at)}</td>
-      <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد تحويلات</div></td></tr>`;
+  function rowsFor(items){
+    return items.length ? items.map(t=>{
+      const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
+      return `<tr>
+        <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${t.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
+        <td>${esc(t.statement||'—')}</td>
+        <td class="num">${money(t.amount)}</td>
+        <td>${esc(t.currency||'SAR')}</td>
+        <td>${esc(userLabel(t.created_by))}</td>
+        <td>${fmtDateTime(t.created_at)}</td>
+        <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد تحويلات</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>العهدة</th><th>البيان</th><th>المبلغ</th><th>العملة</th><th>بواسطة</th><th>التاريخ</th><th></th></tr></thead>
+    <tbody>${rowsFor(items)}</tbody></table></div>`;
+  }
+  const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">التحويلات</div><h2>التحويلات إلى العهد</h2></div>
       ${Perm.canTransfer(u) ? `<button class="btn btn-gold" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>` : ''}
     </div>
     ${stats}
-    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>العهدة</th><th>البيان</th><th>المبلغ</th><th>العملة</th><th>بواسطة</th><th>التاريخ</th><th></th></tr></thead>
-    <tbody>${rows}</tbody></table></div>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, t=>t.federation_id, tableFor) : tableFor(list)}
+    </div>
   `;
 };
 
@@ -2673,30 +2681,60 @@ Views.federations = function(){
   const isTop = Perm.isTopApprover(u);
   if(!isAud && !isTop) return `<div class="card card-pad">هذه الصفحة غير متاحة لصلاحيتك.</div>`;
   const feds = isAud ? DB.federations : DB.federations.filter(f=>f.federation_id===u.federation_id);
-  const cards = feds.map(f=>{
+
+  function statsFor(f){
     const custodies = DB.custodies.filter(c=>c.federation_id===f.federation_id);
     const users = DB.users.filter(x=>x.federation_id===f.federation_id);
     const costCenters = DB.cost_centers.filter(x=>x.federation_id===f.federation_id);
     let spent=0, budget=0, transferred=0;
     custodies.forEach(c=>{ const fi=custodyFinancials(c); spent+=fi.approvedExpenses; budget+=fi.approvedBudget; transferred+=fi.totalTransferred; });
+    return { custodies, users, costCenters, spent, budget, transferred };
+  }
+
+  if(isAud){
+    const rows = feds.length ? feds.map(f=>{
+      const s = statsFor(f);
+      return `<tr>
+        <td><b>${esc(f.federation_name_ar)}</b><div class="muted small">${esc(f.federation_name_en||'')}</div></td>
+        <td class="num">${s.custodies.length}</td>
+        <td class="num">${s.users.length}</td>
+        <td class="num">${s.costCenters.length}</td>
+        <td class="num">${money(s.budget)}</td>
+        <td class="num">${money(s.transferred)}</td>
+        <td class="num">${money(s.spent)}</td>
+        <td>${fmtDate(f.created_at)}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="8"><div class="empty-row">لا توجد اتحادات</div></td></tr>`;
+    return `
+      <div class="section-head"><div><div class="eyebrow">صلاحية المراجع</div><h2>الاتحادات</h2></div></div>
+      <div class="tbl-wrap mt-16">
+        <table class="tbl"><thead><tr>
+          <th>الاتحاد</th><th>عدد العهد</th><th>عدد المستخدمين</th><th>مراكز التكلفة</th><th>الميزانية المعتمدة</th><th>إجمالي المحوّل</th><th>المصروف الفعلي</th><th>تاريخ الإنشاء</th>
+        </tr></thead><tbody>${rows}</tbody></table>
+      </div>
+    `;
+  }
+
+  const cards = feds.map(f=>{
+    const s = statsFor(f);
     return `
     <div class="card card-pad">
       <h3 style="margin:0 0 4px;">${esc(f.federation_name_ar)}</h3>
       <div class="muted small mb-12">${esc(f.federation_name_en||'')}</div>
       <div class="kv-grid">
-        <div><div class="kv-lbl">عدد العهد</div><div class="kv-val">${custodies.length}</div></div>
-        <div><div class="kv-lbl">عدد المستخدمين</div><div class="kv-val">${users.length}</div></div>
-        <div><div class="kv-lbl">عدد مراكز التكلفة</div><div class="kv-val">${costCenters.length}</div></div>
-        <div><div class="kv-lbl">الميزانية المعتمدة</div><div class="kv-val num">${money(budget)}</div></div>
-        <div><div class="kv-lbl">إجمالي المحوّل</div><div class="kv-val num">${money(transferred)}</div></div>
-        <div><div class="kv-lbl">المصروف الفعلي</div><div class="kv-val num">${money(spent)}</div></div>
+        <div><div class="kv-lbl">عدد العهد</div><div class="kv-val">${s.custodies.length}</div></div>
+        <div><div class="kv-lbl">عدد المستخدمين</div><div class="kv-val">${s.users.length}</div></div>
+        <div><div class="kv-lbl">عدد مراكز التكلفة</div><div class="kv-val">${s.costCenters.length}</div></div>
+        <div><div class="kv-lbl">الميزانية المعتمدة</div><div class="kv-val num">${money(s.budget)}</div></div>
+        <div><div class="kv-lbl">إجمالي المحوّل</div><div class="kv-val num">${money(s.transferred)}</div></div>
+        <div><div class="kv-lbl">المصروف الفعلي</div><div class="kv-val num">${money(s.spent)}</div></div>
         <div><div class="kv-lbl">تاريخ الإنشاء</div><div class="kv-val">${fmtDate(f.created_at)}</div></div>
       </div>
-      ${isTop ? `<div class="alert alert-info mt-16" style="margin-bottom:0;">هذه بيانات الاتحاد للعرض فقط ولا يمكن تعديلها من داخل النظام.</div>` : ''}
+      <div class="alert alert-info mt-16" style="margin-bottom:0;">هذه بيانات الاتحاد للعرض فقط ولا يمكن تعديلها من داخل النظام.</div>
     </div>`;
   }).join('');
   return `
-    <div class="section-head"><div><div class="eyebrow">${isAud?'صلاحية المراجع':'نظرة عامة'}</div><h2>${isAud?'الاتحادات':'بيانات الاتحاد'}</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">نظرة عامة</div><h2>بيانات الاتحاد</h2></div></div>
     <div class="custody-grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));">${cards}</div>
   `;
 };
