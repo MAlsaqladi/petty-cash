@@ -166,7 +166,8 @@ a{color:inherit;}
   display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;
   color:#aebfb0;text-decoration:none;font-size:13px;font-weight:700;cursor:pointer;border:none;background:transparent;width:100%;text-align:right;
 }
-.sb-item .ico{width:18px;text-align:center;opacity:.85;}
+.sb-item .ico{width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;opacity:.9;}
+.sb-item .ico svg{width:17px;height:17px;}
 .sb-item:hover{background:rgba(255,255,255,.06);color:#fff;}
 .sb-item.active{background:var(--teal);color:#fff;}
 .sb-foot{border-top:1px solid rgba(255,255,255,.08);padding-top:12px;margin-top:12px;}
@@ -241,12 +242,19 @@ table.tbl tbody tr:hover{background:var(--paper);}
 @media(max-width:960px){ .grid-2col{grid-template-columns:1fr;} }
 
 /* ---------- Cost center enum picker (add custody) ---------- */
-.cc-pick-list{border:1.5px solid var(--line);border-radius:10px;max-height:220px;overflow-y:auto;background:var(--paper);}
+.cc-combo{border:1.5px solid var(--line);border-radius:10px;padding:10px;background:var(--paper);}
+.cc-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.cc-tag{display:inline-flex;align-items:center;gap:6px;background:var(--teal);color:#fff;border-radius:100px;padding:5px 6px 5px 12px;font-size:12px;font-weight:700;}
+.cc-tag button{background:rgba(255,255,255,.25);border:none;color:#fff;width:16px;height:16px;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
+.cc-tag button:hover{background:rgba(255,255,255,.45);}
+.search-box.full-width{width:100%;}
+.search-box.full-width input{width:100%;}
+.cc-pick-list{border:1.5px solid var(--line);border-radius:10px;max-height:200px;overflow-y:auto;background:var(--panel);}
 .cc-pick-row{display:flex;align-items:center;gap:9px;padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line-soft);}
 .cc-pick-row:last-child{border-bottom:none;}
 .cc-pick-row:hover{background:var(--teal-soft);}
 .cc-pick-row input{width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;}
-.cc-pick-main{font-weight:800;background:var(--panel);}
+.cc-pick-main{font-weight:800;background:var(--paper);}
 .cc-pick-sub{padding-right:34px;color:var(--ink-2);}
 
 /* ---------- Cost center tree ---------- */
@@ -783,17 +791,29 @@ App.exportExcel = function(){
 };
 
 /* ---------------------------- Sidebar / navigation ---------------------------- */
+const ICONS = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>`,
+  briefcase: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`,
+  clipboard: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 2H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2h-4"/><path d="M9 12h6M9 16h6M9 8h1"/></svg>`,
+  exchange: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
+  filecheck: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg>`,
+  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+  tag: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.6 3H4a1 1 0 0 0-1 1v5.6a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.82 0l4.6-4.6a2 2 0 0 0 0-2.82Z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>`,
+  list: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`,
+  building: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="1"/><path d="M9 22v-4h6v4M9 6h1M9 10h1M9 14h1M14 6h1M14 10h1M14 14h1"/></svg>`,
+  user: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+};
 const NAV_ITEMS = [
-  {key:'dashboard', label:'الرئيسية', ico:'🏠', show: ()=>true},
-  {key:'custodylist', label:'العهد النقدية', ico:'💼', show: ()=>true},
-  {key:'budgetslist', label:'المصاريف التقديرية', ico:'📋', show: ()=>true},
-  {key:'transferslist', label:'التحويلات', ico:'⭳', show: ()=>true},
-  {key:'expenseslist', label:'المصاريف الفعلية', ico:'🧾', show: ()=>true},
-  {key:'users', label:'المستخدمون', ico:'👥', show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
-  {key:'costcenters', label:'مراكز التكلفة', ico:'🏷️', show: u=>true},
-  {key:'expensetypes', label:'أنواع المصاريف', ico:'🧾', show: u=>true},
-  {key:'federations', label:'الاتحادات', ico:'🏛️', show: u=>Perm.isAuditor(u)},
-  {key:'profile', label:'ملفي الشخصي', ico:'👤', show: ()=>true},
+  {key:'dashboard', label:'الرئيسية', ico:ICONS.home, show: ()=>true},
+  {key:'custodylist', label:'العهد النقدية', ico:ICONS.briefcase, show: ()=>true},
+  {key:'budgetslist', label:'المصاريف التقديرية', ico:ICONS.clipboard, show: ()=>true},
+  {key:'transferslist', label:'التحويلات', ico:ICONS.exchange, show: ()=>true},
+  {key:'expenseslist', label:'المصاريف الفعلية', ico:ICONS.filecheck, show: ()=>true},
+  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
+  {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>true},
+  {key:'expensetypes', label:'أنواع المصاريف', ico:ICONS.list, show: u=>true},
+  {key:'federations', label:'الاتحادات', ico:ICONS.building, show: u=>Perm.isAuditor(u)},
+  {key:'profile', label:'ملفي الشخصي', ico:ICONS.user, show: ()=>true},
 ];
 
 App.renderShell = function(){
@@ -1422,10 +1442,12 @@ Views.custodyDetail = function(id){
 };
 const Modals = {};
 let CustodyDraft = null;
+let CCPickerQuery = '';
 
 /* ============================= Add Custody (request) ============================= */
 Modals.addCustody = function(){
   const u = Session.user;
+  CCPickerQuery = '';
   CustodyDraft = {
     federation_id: u.federation_id,
     custody_type: CUSTODY_TYPES[0],
@@ -1476,22 +1498,59 @@ function renderCostCenterPicker(fedCC, selected){
   if(!fedCC.length){
     return `<div class="muted small">لا توجد مراكز تكلفة لهذا الاتحاد بعد. أضف مراكز التكلفة أولاً من القائمة الجانبية.</div>`;
   }
+  const tagsHTML = renderCCTags(fedCC, selected);
+  const rowsHTML = renderCCRows(fedCC, selected, CCPickerQuery);
+  return `
+    <div class="cc-combo">
+      <div id="ccTagsWrap">${tagsHTML}</div>
+      <div class="search-box full-width">
+        <input type="text" placeholder="ابحث عن مركز تكلفة…" value="${esc(CCPickerQuery)}" oninput="Modals.setCCQuery(this.value)">
+        <span class="ico">🔎</span>
+      </div>
+      <div class="cc-pick-list mt-8" id="ccPickList">${rowsHTML}</div>
+    </div>
+  `;
+}
+
+function renderCCTags(fedCC, selected){
+  if(!selected.length) return `<div class="muted small mb-8">لم يتم اختيار أي مركز تكلفة بعد</div>`;
+  return `<div class="cc-tags mb-8">${selected.map(id=>{
+    const cc = fedCC.find(c=>c.cost_center_id===id);
+    if(!cc) return '';
+    return `<span class="cc-tag">${esc(cc.cost_center_name_ar)}<button type="button" onclick="Modals.toggleDraftCC('${id}')" title="إزالة">✕</button></span>`;
+  }).join('')}</div>`;
+}
+
+function renderCCRows(fedCC, selected, query){
+  const q = (query||'').trim().toLowerCase();
   const mains = fedCC.filter(cc=>!cc.parent_cost_center_id)
     .sort((a,b)=> MAIN_COST_CENTERS.indexOf(a.cost_center_name_ar) - MAIN_COST_CENTERS.indexOf(b.cost_center_name_ar));
   const rows = mains.map(m=>{
     const subs = fedCC.filter(cc=>cc.parent_cost_center_id===m.cost_center_id);
+    const mainMatches = !q || m.cost_center_name_ar.toLowerCase().includes(q);
+    const matchingSubs = subs.filter(s=> !q || mainMatches || s.cost_center_name_ar.toLowerCase().includes(q));
+    if(q && !mainMatches && matchingSubs.length===0) return '';
     const mainRow = `<label class="cc-pick-row cc-pick-main">
         <input type="checkbox" ${selected.includes(m.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${m.cost_center_id}')">
         <span>${esc(m.cost_center_name_ar)}</span>
       </label>`;
-    const subRows = subs.map(s=>`<label class="cc-pick-row cc-pick-sub">
+    const subRows = matchingSubs.map(s=>`<label class="cc-pick-row cc-pick-sub">
         <input type="checkbox" ${selected.includes(s.cost_center_id)?'checked':''} onchange="Modals.toggleDraftCC('${s.cost_center_id}')">
         <span>${esc(s.cost_center_name_ar)}</span>
       </label>`).join('');
     return mainRow + subRows;
   }).join('');
-  return `<div class="cc-pick-list">${rows}</div>`;
+  return rows || `<div class="muted small" style="padding:12px;">لا نتائج مطابقة لبحثك</div>`;
 }
+
+Modals.setCCQuery = function(v){
+  CCPickerQuery = v;
+  // نحدّث قائمة النتائج فقط، دون لمس حقل البحث نفسه (لتفادي فقدان التركيز أثناء الكتابة)
+  const listEl = document.getElementById('ccPickList');
+  if(!listEl) return;
+  const fedCC = DB.cost_centers.filter(x=>x.federation_id===CustodyDraft.federation_id);
+  listEl.innerHTML = renderCCRows(fedCC, CustodyDraft.cost_centers, v);
+};
 
 Modals.toggleDraftCC = function(ccId){
   const i = CustodyDraft.cost_centers.indexOf(ccId);
