@@ -6,6 +6,7 @@
 <title>نظام إدارة الانتدابات وتذاكر السفر</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&family=Tajawal:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="auth.js"></script>
 <link rel="stylesheet" href="shared.css">
 </head>
@@ -15,7 +16,9 @@
   <div class="stage-card">
     <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
     <h1 class="stage-title">نظام إدارة الانتدابات وتذاكر السفر</h1>
-    <p class="stage-sub">جارٍ التحقق من الجلسة…</p>
+    <div class="card card-pad">
+      <div id="bootStatus"><div class="alert alert-info">جارٍ تحميل النظام…</div></div>
+    </div>
   </div>
 </div>
 
@@ -23,63 +26,1192 @@
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
       <div class="mark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:9px;"></div>
-      <div class="fed" id="sbFedName">—<small>نظام الانتدابات وتذاكر السفر</small></div>
+      <div class="fed" id="sbFedName">—<small>الانتدابات وتذاكر السفر</small></div>
     </div>
-    <nav class="sb-nav"></nav>
+    <nav class="sb-nav" id="sbNav"></nav>
     <div class="sb-foot">
-      <div class="sb-user">
+      <div class="sb-user" onclick="App.go('profile')">
         <div class="av" id="sbAvatar">?</div>
         <div class="who" id="sbWho">—<small>—</small></div>
       </div>
-      <button class="sb-logout" onclick="doLogout()">تسجيل الخروج</button>
+      <button class="sb-logout" onclick="App.exportExcel()">⭳ نسخة احتياطية (Excel)</button>
+      <button class="sb-logout" onclick="App.logout()">تسجيل الخروج</button>
     </div>
   </aside>
   <div class="main">
     <div class="topbar">
       <div>
-        <h1>نظام إدارة الانتدابات وتذاكر السفر</h1>
-        <div class="crumb">قيد الإنشاء</div>
+        <h1 id="topTitle">لوحة الانتدابات</h1>
+        <div class="crumb" id="topCrumb">—</div>
+      </div>
+      <div class="flex gap-8 center">
+        <button class="btn btn-outline btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('sidebar').classList.toggle('open')" style="display:none" id="burgerBtn">☰</button>
       </div>
     </div>
-    <div class="paper-bg">
-      <div class="card card-pad" style="max-width:640px;margin:40px auto;text-align:center;">
-        <div style="font-size:40px;margin-bottom:10px;">🚧</div>
-        <h2 style="margin:0 0 8px;">هذا النظام قيد الإعداد</h2>
-        <p class="muted">
-          تم تجهيز بوابة الدخول والربط بحسابك بنجاح. سيتم بناء شاشات طلبات الانتداب
-          وحجوزات تذاكر السفر هنا في الخطوة القادمة.
-        </p>
-      </div>
-    </div>
+    <div id="view" class="paper-bg"></div>
   </div>
 </div>
 
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+
 <script>
-function esc(s){
-  if(s===null||s===undefined) return '';
-  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
+/* =========================================================================
+   نظام إدارة الانتدابات وتذاكر السفر — نفس بنية نظام العهد تمامًا
+   (App / Views / Modals / Actions / Perm) لكن على جداول: trips, delegations,
+   other_expenses بدل جداول العهد. الجداول المشتركة (federations, users,
+   cost_centers) هي نفسها المستخدمة في نظام العهد.
+   ========================================================================= */
+
+const SCHEMA = {
+  federations: ['federation_id','federation_name_ar','federation_name_en','image','created_by','created_at'],
+  users: ['user_id','federation_id','user_status','employee_name_ar','employee_name_en','national_id','nationality','phone','email','user_name','password','user_type','Job_Title','language','created_at','created_by'],
+  cost_centers: ['cost_center_id','federation_id','parent_cost_center_id','cost_center_name_ar','cost_center_name_en','created_by','created_at'],
+  trips: ['trip_id','federation_number','trip_status','trip_name_ar','trip_name_en','trip_type','justifications','desired_results','achieved_results','cost_centers_id','start_date','end_date','trip_days_count','entity','other_notes','has_sports_equipment','is_transportation_available','is_accommodation_available','file','Balance_trips','created_by','created_at','request_approved_by','request_approval_date','closure_approved_by','closure_approval_date'],
+  delegations: ['delegation_id','trip_id','federation_number','delegations_status','user_type','user_id','amount_delegations','is_linked_to_trip','justification','delegation_days_count','start_date','end_date','is_transportation_available','is_accommodation_available','achieved_goal','hours_count','ticket_type','is_car_traveler','ticket_price','total_amount','file','created_by','created_at','request_approved_by','request_approval_date'],
+  other_expenses: ['expense_id','trip_id','federation_number','expense_status','expense_type','beneficiary','justification','amount','file','created_by','created_at','request_approved_by','request_approval_date']
+};
+const PK = {federations:'federation_id',users:'user_id',cost_centers:'cost_center_id',trips:'trip_id',delegations:'delegation_id',other_expenses:'expense_id'};
+
+const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','لاعب','حكم','متعاون'];
 const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
+const TRIP_STATUSES = ['طلب','اعتماد التكليف','الصرف','الإقفال','مرفوضة'];
+const TRIP_TYPES = ['مشاركة','بطولة','معسكر','وفود','اجتماعات'];
+const ENTITIES = ['المملكة','أفريقيا والشرق الأوسط','آسيا','أوروبا'];
+const TICKET_TYPES = ['اقتصادية','رجال أعمال','أخرى'];
+const DELEGATION_STATUSES = ['غير معتمد','معتمد','مرفوض'];
+const EXPENSE_STATUSES = ['غير معتمد','معتمد','ملغى'];
 
-function doLogout(){
-  Auth.clearSession();
-  Auth.goToLogin();
+let DB = null;
+let Session = { user:null, view:'dashboard', params:{} };
+
+/* ---------------------------- Utilities ---------------------------- */
+function uid(prefix){ return prefix + Math.random().toString(16).slice(2,10); }
+function nowISO(){ return new Date().toISOString(); }
+function fmtDate(d){
+  if(!d) return '—';
+  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric'}); }
+  catch(e){ return String(d); }
+}
+function fmtDateTime(d){
+  if(!d) return '—';
+  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleString('ar-SA',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(e){ return String(d); }
+}
+function money(n){ n=Number(n||0); return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ر.س'; }
+function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg, kind){
+  const root = document.getElementById('toastRoot');
+  const box = document.createElement('div');
+  box.className = 'toast';
+  if(kind==='danger') box.style.background = 'var(--danger)';
+  if(kind==='success') box.style.background = 'var(--success)';
+  box.textContent = msg;
+  root.appendChild(box);
+  setTimeout(()=>{ box.style.transition='opacity .3s'; box.style.opacity='0'; setTimeout(()=>box.remove(),300); }, 2600);
 }
 
-function boot(){
-  const u = Auth.readSession();
-  if(!u || NO_LOGIN_USER_TYPES.includes(u.user_type)){
-    Auth.clearSession();
-    Auth.goToLogin();
-    return;
+/* ---------------------------- Server layer ---------------------------- */
+async function apiCall(body){
+  let res;
+  try{ res = await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+  catch(e){ return { data:null, error:{ message:'تعذّر الاتصال بالخادم.' } }; }
+  try{ return await res.json(); }
+  catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم' } }; }
+}
+const READ_SOURCE = { users: 'users_public' };
+function readSource(table){ return READ_SOURCE[table] || table; }
+async function loadAllData(){
+  const tables = Object.keys(SCHEMA);
+  const results = await Promise.all(tables.map(t => apiCall({ op:'select', table: readSource(t) })));
+  const out = {};
+  for(let i=0;i<tables.length;i++){
+    if(results[i].error){ throw new Error(`تعذّرت قراءة جدول ${tables[i]}: ${results[i].error.message}`); }
+    out[tables[i]] = results[i].data || [];
   }
-  document.getElementById('sbWho').innerHTML = esc(u.employee_name_ar || u.user_name) + '<small>' + esc(u.user_type) + '</small>';
-  document.getElementById('sbAvatar').textContent = (u.employee_name_ar || u.user_name || '?').trim().charAt(0);
-  document.getElementById('screen-boot').classList.add('hidden');
-  document.getElementById('app-shell').classList.remove('hidden');
+  return out;
+}
+async function dbInsert(table, obj){
+  const { data, error } = await apiCall({ op:'insert', table, payload: obj, returning: true });
+  if(error){ toast('تعذّر الحفظ: ' + error.message, 'danger'); return null; }
+  DB[table].push(data);
+  return data;
+}
+async function dbUpdate(table, pkField, id, patch){
+  const { data, error } = await apiCall({ op:'update', table, pkField, id, patch, returning: true });
+  if(error){ toast('تعذّر التحديث: ' + error.message, 'danger'); return null; }
+  const idx = DB[table].findIndex(r => r[pkField] === id);
+  if(idx >= 0) DB[table][idx] = data;
+  return data;
+}
+async function dbInsertUser(obj){
+  const { error } = await apiCall({ op:'insert', table:'users', payload: obj, returning:false });
+  if(error){ toast('تعذّر حفظ المستخدم: ' + error.message, 'danger'); return null; }
+  DB.users.push(obj); return obj;
+}
+async function dbUpdateUser(userId, patch){
+  const { error } = await apiCall({ op:'update', table:'users', pkField:'user_id', id:userId, patch, returning:false });
+  if(error){ toast('تعذّر تحديث المستخدم: ' + error.message, 'danger'); return null; }
+  const idx = DB.users.findIndex(r=>r.user_id===userId);
+  if(idx>=0) Object.assign(DB.users[idx], patch);
+  return idx>=0 ? DB.users[idx] : patch;
+}
+async function apiUpload(file, folder){
+  const fd = new FormData(); fd.append('file', file); fd.append('folder', folder);
+  let res;
+  try{ res = await fetch('/api/upload', { method:'POST', body: fd }); }
+  catch(e){ return { data:null, error:{ message:'تعذّر رفع الملف' } }; }
+  try{ return await res.json(); } catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة أثناء الرفع' } }; }
+}
+async function viewAttachment(filePath){
+  if(!filePath){ toast('لا يوجد مرفق','danger'); return; }
+  let res;
+  try{ res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path:filePath }) }); }
+  catch(e){ toast('تعذّر الاتصال بالخادم','danger'); return; }
+  let json; try{ json = await res.json(); } catch(e){ toast('استجابة غير متوقعة','danger'); return; }
+  if(json.error){ toast('تعذّر فتح المرفق: '+json.error.message,'danger'); return; }
+  window.open(json.data.url, '_blank');
+}
+function attachBtnHTML(filePath){
+  if(!filePath) return '';
+  return `<button class="btn btn-ghost btn-sm" onclick="viewAttachment('${esc(filePath)}')" title="عرض المرفق">📎 المرفق</button>`;
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+/* ---------------------------- Permissions ---------------------------- */
+const Perm = {
+  isAuditor: u => u && u.user_type === 'مراجع',
+  isPresident: u => u && u.user_type === 'رئيس الاتحاد',
+  isExec: u => u && u.user_type === 'مدير تنفيذي',
+  isAccountant: u => u && u.user_type === 'محاسب',
+  isEmployee: u => u && u.user_type === 'موظف',
+  isHR: u => u && u.user_type === 'موارد بشرية',
+  isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
+  isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
+  canManageUsers: u => !Perm.isBasicStaff(u),
+  canChangeUserStatus: u => Perm.isTopApprover(u),
+  canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
+  canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
+  /* موارد بشرية هي صاحبة صلاحية طلب الانتداب/الرحلة، وإن لم يوجد موارد بشرية بالاتحاد تنتقل للمحاسب */
+  hrActiveExists: fedId => DB.users.some(x=>x.federation_id===fedId && x.user_type==='موارد بشرية' && x.user_status==='مفتوح'),
+  canRequestTrip: u => {
+    if(!u) return false;
+    if(Perm.isHR(u)) return true;
+    if(Perm.isAccountant(u) && !Perm.hrActiveExists(u.federation_id)) return true;
+    return false;
+  },
+  canApproveTrip: u => Perm.isTopApprover(u),
+  canStartDisbursement: u => Perm.isTopApprover(u) || Perm.isAccountant(u),
+  canCloseTrip: u => Perm.isTopApprover(u),
+  canEditTrip: (u,t) => t && t.trip_status==='طلب' && u.federation_id===t.federation_number && (u.user_id===t.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
+  canManageParticipants: (u,t) => t && t.trip_status!=='الإقفال' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
+  canApproveParticipant: u => Perm.isTopApprover(u),
+  canManageOtherExpenses: (u,t) => t && t.trip_status!=='الإقفال' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
+  canApproveOtherExpense: u => Perm.isTopApprover(u),
+};
+
+/* ---------------------------- Scoped data ---------------------------- */
+function visibleTrips(u){
+  if(!u) return [];
+  if(Perm.isAuditor(u)) return DB.trips.slice();
+  if(Perm.isBasicStaff(u)) return DB.trips.filter(t=>t.federation_number===u.federation_id && t.created_by===u.user_id);
+  return DB.trips.filter(t=>t.federation_number===u.federation_id);
+}
+function visibleUsers(u){
+  if(!u) return [];
+  if(Perm.isAuditor(u)) return DB.users.slice();
+  return DB.users.filter(x=>x.federation_id===u.federation_id);
+}
+function visibleCostCenters(u){
+  if(!u) return [];
+  if(Perm.isAuditor(u)) return DB.cost_centers.slice();
+  return DB.cost_centers.filter(x=>x.federation_id===u.federation_id);
+}
+function federationById(id){ return DB.federations.find(f=>f.federation_id===id); }
+function userById(id){ return DB.users.find(x=>x.user_id===id); }
+function userLabel(id){ const x=userById(id); return x ? (x.employee_name_ar||x.user_name) : '—'; }
+function costCenterLabel(id){ const c = DB.cost_centers.find(x=>x.cost_center_id===id); return c ? c.cost_center_name_ar : '—'; }
+function tripCostCenterIds(t){ return (t.cost_centers_id||'').split(',').map(s=>s.trim()).filter(Boolean); }
+function tripParticipants(tripId){ return DB.delegations.filter(d=>d.trip_id===tripId); }
+function tripOtherExpenses(tripId){ return DB.other_expenses.filter(e=>e.trip_id===tripId); }
+function tripFinancials(t){
+  const participants = tripParticipants(t.trip_id);
+  const otherExp = tripOtherExpenses(t.trip_id);
+  const approvedParticipantsAmt = participants.filter(d=>d.delegations_status==='معتمد').reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const pendingParticipantsAmt = participants.filter(d=>d.delegations_status==='غير معتمد').reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const approvedOtherAmt = otherExp.filter(e=>e.expense_status==='معتمد').reduce((s,e)=>s+Number(e.amount||0),0);
+  const pendingOtherAmt = otherExp.filter(e=>e.expense_status==='غير معتمد').reduce((s,e)=>s+Number(e.amount||0),0);
+  const totalApproved = approvedParticipantsAmt + approvedOtherAmt;
+  const totalPending = pendingParticipantsAmt + pendingOtherAmt;
+  return { participants, otherExp, approvedParticipantsAmt, pendingParticipantsAmt, approvedOtherAmt, pendingOtherAmt, totalApproved, totalPending };
+}
+function tripStatusBadge(s){
+  const map = {'طلب':'warning','اعتماد التكليف':'gold','الصرف':'info','الإقفال':'success','مرفوضة':'danger'};
+  return `<span class="badge badge-${map[s]||'muted'}">${esc(s||'—')}</span>`;
+}
+function delegationStatusBadge(s){
+  const map = {'غير معتمد':'warning','معتمد':'success','مرفوض':'danger'};
+  return `<span class="badge badge-${map[s]||'muted'}">${esc(s||'—')}</span>`;
+}
+function expenseStatusBadge(s){
+  const map = {'غير معتمد':'warning','معتمد':'success','ملغى':'danger'};
+  return `<span class="badge badge-${map[s]||'muted'}">${esc(s||'—')}</span>`;
+}
+function userStatusBadge(s){
+  const map = {'مفتوح':'success','مغلق':'muted','تحت المعالجة':'warning','مسودة':'muted'};
+  return `<span class="badge badge-${map[s]||'muted'}">${esc(s||'—')}</span>`;
+}
+
+/* ---------------------------- Excel backup ---------------------------- */
+function visibleDataForExport(){
+  const u = Session.user;
+  if(!u || Perm.isAuditor(u)) return DB;
+  const trips = visibleTrips(u);
+  const tripIds = new Set(trips.map(t=>t.trip_id));
+  return {
+    federations: DB.federations.filter(f=>f.federation_id===u.federation_id),
+    users: visibleUsers(u),
+    cost_centers: visibleCostCenters(u),
+    trips,
+    delegations: DB.delegations.filter(d=>tripIds.has(d.trip_id)),
+    other_expenses: DB.other_expenses.filter(e=>tripIds.has(e.trip_id)),
+  };
+}
+function exportWorkbook(){
+  const scoped = visibleDataForExport();
+  const wb = XLSX.utils.book_new();
+  Object.keys(SCHEMA).forEach(sheetName=>{
+    const headers = SCHEMA[sheetName];
+    const rows = (scoped[sheetName]||[]).map(r=>{ const row={}; headers.forEach(h=>{ row[h]=(r[h]===undefined)?null:r[h]; }); return row; });
+    const ws = XLSX.utils.json_to_sheet(rows, {header:headers});
+    XLSX.utils.sheet_add_aoa(ws, [headers], {origin:'A1'});
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  });
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  XLSX.writeFile(wb, 'secondments-backup-' + stamp + '.xlsx');
+}
+
+/* ---------------------------- App bootstrap ---------------------------- */
+async function bootApp(){
+  const statusEl = document.getElementById('bootStatus');
+  const sessionUser = Auth.readSession();
+  if(!sessionUser){ Auth.goToLogin(); return; }
+  if(NO_LOGIN_USER_TYPES.includes(sessionUser.user_type)){ Auth.clearSession(); Auth.goToLogin(); return; }
+  try{
+    statusEl.innerHTML = `<div class="alert alert-info">جارٍ الاتصال بالخادم…</div>`;
+    DB = await loadAllData();
+    if(DB.federations.length===0){
+      statusEl.innerHTML = `<div class="alert alert-danger">لا يوجد أي اتحاد في قاعدة البيانات بعد.</div>`;
+      return;
+    }
+    const freshUser = (DB.users||[]).find(x=>x.user_id===sessionUser.user_id);
+    if(!freshUser || freshUser.user_status!=='مفتوح'){ Auth.clearSession(); Auth.goToLogin(); return; }
+    Session.user = freshUser; Session.view = 'dashboard'; Session.params = {};
+    document.getElementById('screen-boot').classList.add('hidden');
+    document.getElementById('app-shell').classList.remove('hidden');
+    App.renderShell();
+    App.go('dashboard');
+  }catch(err){
+    console.error(err);
+    statusEl.innerHTML = `<div class="alert alert-danger">تعذّر الاتصال بالخادم.<br><span class="small">${esc(err.message||'')}</span></div>`;
+  }
+}
+
+/* ============================= App object ============================= */
+const App = {};
+App.logout = function(){ Session.user = null; Auth.clearSession(); Auth.goToLogin(); };
+App.exportExcel = function(){ exportWorkbook(); toast('تم تنزيل نسخة محدّثة من ملف البيانات','success'); };
+App.syncData = async function(){
+  const btn = document.getElementById('syncBtn');
+  if(btn){ btn.disabled=true; btn.textContent='🔄 جارٍ المزامنة…'; }
+  try{ DB = await loadAllData(); App.render(); toast('تمت المزامنة بنجاح','success'); }
+  catch(err){ toast('تعذّرت المزامنة: '+(err.message||''),'danger'); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='🔄 مزامنة'; } }
+};
+
+const ICONS = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>`,
+  plane: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-1 .1-1.3.5l-.4.5c-.5.6-.4 1.5.3 1.9L9 12l-2 3H3l-1 2 4 1 1 4 2-1v-4l3-2 3.5 5.3c.4.7 1.3.8 1.9.3l.5-.4c.4-.3.6-.8.5-1.3z"/></svg>`,
+  ticket: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1.5a1.5 1.5 0 0 0 0 3V15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1.5a1.5 1.5 0 0 0 0-3z"/><path d="M9 7v10"/></svg>`,
+  filecheck: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg>`,
+  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+  tag: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.6 3H4a1 1 0 0 0-1 1v5.6a2 2 0 0 0 .59 1.41l9.58 9.58a2 2 0 0 0 2.82 0l4.6-4.6a2 2 0 0 0 0-2.82Z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>`,
+  building: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="1"/><path d="M9 22v-4h6v4M9 6h1M9 10h1M9 14h1M14 6h1M14 10h1M14 14h1"/></svg>`,
+};
+const NAV_ITEMS = [
+  {key:'dashboard', label:'الرئيسية', ico:ICONS.home, show:()=>true},
+  {key:'trips', label:'الرحلات', ico:ICONS.plane, show:()=>true},
+  {key:'tickets', label:'تذاكر السفر', ico:ICONS.ticket, show:()=>true},
+  {key:'otherExpenses', label:'المصاريف الأخرى', ico:ICONS.filecheck, show:()=>true},
+  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
+  {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isBasicStaff(u)},
+  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)},
+];
+const VIEW_META = {
+  dashboard:{title:'لوحة الانتدابات', crumb:'نظرة عامة على الرحلات والمشاركين'},
+  trips:{title:'الرحلات', crumb:'طلبات الرحلات والانتدابات'},
+  tripDetail:{title:'تفاصيل الرحلة', crumb:'المشاركون والمصاريف الأخرى'},
+  tickets:{title:'تذاكر السفر', crumb:'كل تذاكر/مشاركات المنتدبين'},
+  otherExpenses:{title:'المصاريف الأخرى', crumb:'مصاريف مرتبطة بالرحلات'},
+  users:{title:'المستخدمون', crumb:'إدارة مستخدمي النظام'},
+  userDetail:{title:'تفاصيل المستخدم', crumb:'الرحلات الخاصة بهذا المستخدم'},
+  costcenters:{title:'مراكز التكلفة', crumb:'مراكز التكلفة الرئيسية والفرعية'},
+  federations:{title:'الاتحادات', crumb:'إدارة الاتحادات'},
+  profile:{title:'ملفي الشخصي', crumb:'بياناتك وكلمة المرور'},
+};
+
+App.renderShell = function(){
+  const u = Session.user;
+  const fed = federationById(u.federation_id);
+  document.getElementById('sbFedName').innerHTML = fed ? (esc(fed.federation_name_ar)+'<small>الانتدابات وتذاكر السفر</small>') : ('كل الاتحادات<small>صلاحية المراجع</small>');
+  document.getElementById('sbWho').innerHTML = esc(u.employee_name_ar||u.user_name) + '<small>'+esc(u.user_type)+'</small>';
+  document.getElementById('sbAvatar').textContent = (u.employee_name_ar||u.user_name||'?').trim().charAt(0);
+  const nav = document.getElementById('sbNav');
+  nav.innerHTML = NAV_ITEMS.filter(n=>n.show(u)).map(n=>{
+    const label = typeof n.label==='function' ? n.label(u) : n.label;
+    return `<button class="sb-item" data-nav="${n.key}" onclick="App.go('${n.key}')"><span class="ico">${n.ico}</span><span>${esc(label)}</span></button>`;
+  }).join('');
+};
+App.setActiveNav = function(key){
+  document.querySelectorAll('.sb-item').forEach(el=>{
+    el.classList.toggle('active', el.getAttribute('data-nav')===key);
+  });
+};
+App.go = function(view, params){
+  Session.view = view; Session.params = params || {};
+  App.setActiveNav(view);
+  const meta = VIEW_META[view] || {title:'',crumb:''};
+  document.getElementById('topTitle').textContent = meta.title;
+  document.getElementById('topCrumb').textContent = meta.crumb;
+  window.scrollTo(0,0);
+  App.render();
+};
+App.render = function(){
+  const view = document.getElementById('view');
+  const fn = Views[Session.view];
+  view.innerHTML = fn ? fn(Session.params.id) : `<div class="card card-pad">الصفحة غير موجودة.</div>`;
+};
+
+/* ============================= Modal helpers ============================= */
+function modalShell(id, title, bodyHTML, wide, footerHTML){
+  return `<div class="modal-overlay" id="${id}Overlay" onclick="if(event.target===this) closeModal()">
+    <div class="modal ${wide?'modal-wide':''}">
+      <div class="modal-head"><h3>${esc(title)}</h3><button class="modal-x" onclick="closeModal()">✕</button></div>
+      <div class="modal-body" id="${id}Body">${bodyHTML}</div>
+      ${footerHTML!==false ? `<div class="modal-foot">${footerHTML||''}</div>` : ''}
+    </div>
+  </div>`;
+}
+function openModalHTML(html){ document.getElementById('modalRoot').innerHTML = html; }
+function closeModal(){ document.getElementById('modalRoot').innerHTML = ''; }
+
+const Views = {};
+const Modals = {};
+const Actions = {};
+
+/* ============================= Dashboard ============================= */
+Views.dashboard = function(){
+  const u = Session.user;
+  const trips = visibleTrips(u);
+  const pendingReq = trips.filter(t=>t.trip_status==='طلب');
+  const inAssignment = trips.filter(t=>t.trip_status==='اعتماد التكليف');
+  const inDisbursement = trips.filter(t=>t.trip_status==='الصرف');
+  const closed = trips.filter(t=>t.trip_status==='الإقفال');
+  const tripIds = new Set(trips.map(t=>t.trip_id));
+  const allParticipants = DB.delegations.filter(d=>tripIds.has(d.trip_id));
+  const pendingParticipants = allParticipants.filter(d=>d.delegations_status==='غير معتمد');
+  const totalApprovedAmt = trips.reduce((s,t)=>s+tripFinancials(t).approvedParticipantsAmt+tripFinancials(t).approvedOtherAmt,0);
+
+  const quickActions = [];
+  if(Perm.canRequestTrip(u)) quickActions.push(`<button class="btn btn-primary" onclick="Modals.addTrip()">+ طلب رحلة جديدة</button>`);
+  if(Perm.canManageUsers(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.addUser()">+ إضافة مستخدم</button>`);
+
+  const recentTrips = trips.slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)).slice(0,6);
+  const recentRows = recentTrips.length ? recentTrips.map(t=>`
+    <div class="activity-row" onclick="App.go('tripDetail',{id:'${t.trip_id}'})">
+      <span class="ai">✈️</span>
+      <span class="at grow"><b>${esc(t.trip_name_ar||'—')}</b> — ${esc(userLabel(t.created_by))}</span>
+      <span class="atime">${tripStatusBadge(t.trip_status)}</span>
+    </div>`).join('') : `<div class="empty-row">لا توجد رحلات بعد</div>`;
+
+  return `
+    <div class="section-head"><div><div class="eyebrow">نظرة عامة</div><h2>مرحبًا، ${esc(u.employee_name_ar||u.user_name)}</h2></div>
+      <div class="flex gap-8 wrap">${quickActions.join('')}</div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card accent-teal"><div class="lbl">إجمالي الرحلات</div><div class="val num">${trips.length}</div></div>
+      <div class="stat-card accent-warn"><div class="lbl">بانتظار اعتماد التكليف</div><div class="val num">${pendingReq.length}</div></div>
+      <div class="stat-card accent-gold"><div class="lbl">قيد الصرف</div><div class="val num">${inDisbursement.length}</div></div>
+      <div class="stat-card accent-danger"><div class="lbl">مشاركون بانتظار الاعتماد</div><div class="val num">${pendingParticipants.length}</div></div>
+    </div>
+    <div class="stats-grid mt-16">
+      <div class="stat-card"><div class="lbl">رحلات في اعتماد التكليف</div><div class="val num">${inAssignment.length}</div></div>
+      <div class="stat-card"><div class="lbl">رحلات مقفلة</div><div class="val num">${closed.length}</div></div>
+      <div class="stat-card"><div class="lbl">إجمالي المصروف المعتمد</div><div class="val num">${money(totalApprovedAmt)}</div></div>
+    </div>
+    <h3 class="block-title mt-24">أحدث الرحلات</h3>
+    <div class="card">${recentRows}</div>
+  `;
+};
+
+/* ============================= Trips list ============================= */
+Views.trips = function(){
+  const u = Session.user;
+  let list = visibleTrips(u).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const addBtn = Perm.canRequestTrip(u) ? `<button class="btn btn-primary" onclick="Modals.addTrip()">+ طلب رحلة جديدة</button>` : '';
+  const isAud = Perm.isAuditor(u);
+  function rowsFor(items){
+    return items.length ? items.map(t=>`
+      <tr class="clickable-row" onclick="App.go('tripDetail',{id:'${t.trip_id}'})">
+        <td><b>${esc(t.trip_name_ar||'—')}</b><div class="muted small">${esc(t.trip_type||'—')} · ${esc(t.entity||'—')}</div></td>
+        <td>${tripStatusBadge(t.trip_status)}</td>
+        <td>${fmtDate(t.start_date)}</td>
+        <td>${fmtDate(t.end_date)}</td>
+        <td>${esc(userLabel(t.created_by))}</td>
+        <td>${fmtDate(t.created_at)}</td>
+      </tr>`).join('') : `<tr><td colspan="6"><div class="empty-row">لا توجد رحلات</div></td></tr>`;
+  }
+  function tableFor(items){
+    return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الرحلة</th><th>الحالة</th><th>تاريخ البداية</th><th>تاريخ النهاية</th><th>مقدّم الطلب</th><th>تاريخ الطلب</th></tr></thead>
+    <tbody>${rowsFor(items)}</tbody></table></div>`;
+  }
+  return `
+    <div class="section-head"><div><div class="eyebrow">الرحلات</div><h2>طلبات الرحلات والانتدابات</h2></div>${addBtn}</div>
+    <div class="mt-16">
+      ${isAud ? renderFederationTree(list, t=>t.federation_number, tableFor, items=>statChip('العدد', items.length)) : tableFor(list)}
+    </div>
+  `;
+};
+
+function renderFederationTree(items, fedKeyFn, tableFor, statsFn){
+  const groups = {};
+  items.forEach(it=>{ const k=fedKeyFn(it)||'—'; (groups[k]=groups[k]||[]).push(it); });
+  return Object.keys(groups).map(fedId=>{
+    const fed = federationById(fedId);
+    const items2 = groups[fedId];
+    return `<div class="card mt-16">
+      <div class="card-pad" style="padding-bottom:0;">
+        <div class="section-head" style="margin-bottom:8px;">
+          <h3 style="font-size:14px;margin:0;">${esc(fed?fed.federation_name_ar:'بدون اتحاد')}</h3>
+          <div class="flex gap-8">${statsFn(items2)}</div>
+        </div>
+      </div>
+      ${tableFor(items2)}
+    </div>`;
+  }).join('') || `<div class="empty-row">لا توجد بيانات</div>`;
+}
+function statChip(lbl, val){ return `<span class="chip on" style="cursor:default;">${esc(lbl)}: <b>${esc(String(val))}</b></span>`; }
+
+/* ============================= Add Trip ============================= */
+let TripDraft = null;
+Modals.addTrip = function(){
+  const u = Session.user;
+  if(!Perm.canRequestTrip(u)){ toast('لا تملك صلاحية طلب رحلة/انتداب','danger'); return; }
+  TripDraft = {
+    federation_number: u.federation_id, trip_name_ar:'', trip_name_en:'', trip_type:TRIP_TYPES[0],
+    justifications:'', desired_results:'', cost_centers:[], start_date:'', end_date:'', entity:ENTITIES[0],
+    other_notes:'', has_sports_equipment:false, is_transportation_available:false, is_accommodation_available:false
+  };
+  openModalHTML(modalShell('addTripModal','طلب رحلة / انتداب جديد', Modals.renderAddTripBody(), true,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" id="saveTripBtn" onclick="Actions.saveTrip()" ${isTripDraftValid(TripDraft)?'':'disabled'}>حفظ طلب الرحلة</button>`));
+};
+function isTripDraftValid(d){
+  if(!d.trip_name_ar.trim() || !d.start_date || !d.end_date) return false;
+  if(!d.cost_centers.length) return false;
+  return true;
+}
+Modals.renderAddTripBody = function(){
+  const u = Session.user;
+  const fedCC = DB.cost_centers.filter(x=>x.federation_id===u.federation_id);
+  const d = TripDraft;
+  const typeOpts = TRIP_TYPES.map(t=>`<option value="${esc(t)}" ${d.trip_type===t?'selected':''}>${esc(t)}</option>`).join('');
+  const entityOpts = ENTITIES.map(t=>`<option value="${esc(t)}" ${d.entity===t?'selected':''}>${esc(t)}</option>`).join('');
+  const ccOpts = fedCC.map(cc=>`<span class="chip ${d.cost_centers.includes(cc.cost_center_id)?'on':''}" onclick="Modals.toggleTripCC('${cc.cost_center_id}')">${esc(cc.cost_center_name_ar)}</span>`).join('') || `<div class="muted small">لا توجد مراكز تكلفة لهذا الاتحاد بعد.</div>`;
+  return `
+  <div class="form-grid">
+    <div class="field full"><label>اسم الرحلة (عربي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.trip_name_ar)}" oninput="Modals.updateTripField('trip_name_ar',this.value)"></div>
+    <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" value="${esc(d.trip_name_en)}" oninput="Modals.updateTripField('trip_name_en',this.value)"></div>
+    <div class="field"><label>نوع الرحلة</label><select onchange="Modals.updateTripField('trip_type',this.value)">${typeOpts}</select></div>
+    <div class="field"><label>إلى أين (الجهة)</label><select onchange="Modals.updateTripField('entity',this.value)">${entityOpts}</select></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date)}" oninput="Modals.updateTripField('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date)}" oninput="Modals.updateTripField('end_date',this.value)"></div>
+    <div class="field full"><label>المبررات</label><textarea rows="2" oninput="Modals.updateTripField('justifications',this.value)">${esc(d.justifications)}</textarea></div>
+    <div class="field full"><label>الأهداف المطلوب تحقيقها</label><textarea rows="2" oninput="Modals.updateTripField('desired_results',this.value)">${esc(d.desired_results)}</textarea></div>
+    <div class="field full"><label>ملاحظات أخرى</label><textarea rows="2" oninput="Modals.updateTripField('other_notes',this.value)">${esc(d.other_notes)}</textarea></div>
+    <div class="field full">
+      <label>مراكز التكلفة (يمكن اختيار أكثر من واحد) <span class="muted">— إلزامي</span></label>
+      <div class="cc-combo"><div>${ccOpts}</div></div>
+    </div>
+    <div class="field"><label>هل يشمل الانتداب نقلاً؟</label><select onchange="Modals.updateTripField('is_transportation_available',this.value==='true')">
+      <option value="false" ${!d.is_transportation_available?'selected':''}>لا</option><option value="true" ${d.is_transportation_available?'selected':''}>نعم</option></select></div>
+    <div class="field"><label>هل يشمل الانتداب سكنًا؟</label><select onchange="Modals.updateTripField('is_accommodation_available',this.value==='true')">
+      <option value="false" ${!d.is_accommodation_available?'selected':''}>لا</option><option value="true" ${d.is_accommodation_available?'selected':''}>نعم</option></select></div>
+    <div class="field"><label>معدّات رياضية مصاحبة؟</label><select onchange="Modals.updateTripField('has_sports_equipment',this.value==='true')">
+      <option value="false" ${!d.has_sports_equipment?'selected':''}>لا</option><option value="true" ${d.has_sports_equipment?'selected':''}>نعم</option></select></div>
+  </div>`;
+};
+Modals.updateTripField = function(key,val){
+  TripDraft[key]=val;
+  const saveBtn=document.getElementById('saveTripBtn');
+  if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
+};
+Modals.toggleTripCC = function(id){
+  const i = TripDraft.cost_centers.indexOf(id);
+  if(i>=0) TripDraft.cost_centers.splice(i,1); else TripDraft.cost_centers.push(id);
+  const body = document.getElementById('addTripModalBody');
+  if(body) body.innerHTML = Modals.renderAddTripBody();
+  const saveBtn=document.getElementById('saveTripBtn');
+  if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
+};
+Actions.saveTrip = async function(){
+  const u = Session.user;
+  const d = TripDraft;
+  if(!isTripDraftValid(d)){ toast('أكمل الحقول الإلزامية أولاً','danger'); return; }
+  const days = Math.max(1, Math.round((new Date(d.end_date)-new Date(d.start_date))/86400000)+1);
+  const tripId = uid('trp');
+  const trip = {
+    trip_id: tripId, federation_number: d.federation_number, trip_status:'طلب',
+    trip_name_ar: d.trip_name_ar, trip_name_en: d.trip_name_en, trip_type: d.trip_type,
+    justifications: d.justifications, desired_results: d.desired_results, achieved_results:null,
+    cost_centers_id: d.cost_centers.join(','), start_date: d.start_date, end_date: d.end_date,
+    trip_days_count: days, entity: d.entity, other_notes: d.other_notes,
+    has_sports_equipment: !!d.has_sports_equipment, is_transportation_available: !!d.is_transportation_available,
+    is_accommodation_available: !!d.is_accommodation_available, file:null, Balance_trips:0,
+    created_by: u.user_id, created_at: nowISO(),
+    request_approved_by:null, request_approval_date:null, closure_approved_by:null, closure_approval_date:null
+  };
+  const saved = await dbInsert('trips', trip);
+  if(!saved) return;
+  closeModal();
+  toast('تم إرسال طلب الرحلة بنجاح، بانتظار اعتماد التكليف','success');
+  App.go('tripDetail',{id:tripId});
+};
+
+/* ============================= Trip detail ============================= */
+Views.tripDetail = function(tripId){
+  const u = Session.user;
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  if(!t) return `<div class="card card-pad">لم يتم العثور على الرحلة.</div>`;
+  const sameFed = Perm.isAuditor(u) || t.federation_number===u.federation_id;
+  if(!sameFed) return `<div class="card card-pad">لا تملك صلاحية عرض هذه الرحلة.</div>`;
+  const fed = federationById(t.federation_number);
+  const requester = userById(t.created_by);
+  const approver = userById(t.request_approved_by);
+  const closer = userById(t.closure_approved_by);
+  const f = tripFinancials(t);
+  const ccNames = tripCostCenterIds(t).map(id=>costCenterLabel(id)).join('، ') || '—';
+
+  const actionBtns = [];
+  if(Perm.canEditTrip(u,t)) actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Modals.editTrip('${t.trip_id}')">✎ تعديل</button>`);
+  if(t.trip_status==='طلب' && Perm.canApproveTrip(u) && sameFed){
+    actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Actions.approveTripAssignment('${t.trip_id}')">✔ اعتماد التكليف</button>`);
+    actionBtns.push(`<button class="btn btn-danger btn-sm" onclick="Actions.rejectTrip('${t.trip_id}')">✕ رفض</button>`);
+  }
+  if(t.trip_status==='اعتماد التكليف' && Perm.canStartDisbursement(u) && sameFed){
+    actionBtns.push(`<button class="btn btn-gold btn-sm" onclick="Actions.startDisbursement('${t.trip_id}')">⭳ بدء الصرف</button>`);
+  }
+  if(t.trip_status==='الصرف' && Perm.canCloseTrip(u) && sameFed){
+    actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Modals.closeTrip('${t.trip_id}')">🔒 إقفال الرحلة</button>`);
+  }
+
+  const canAddParticipant = Perm.canManageParticipants(u,t);
+  const participantRows = f.participants.length ? f.participants.map(pt=>{
+    const canApprove = pt.delegations_status==='غير معتمد' && Perm.canApproveParticipant(u) && sameFed;
+    return `<tr>
+      <td>${esc(userLabel(pt.user_id))}</td>
+      <td>${esc(pt.ticket_type||'—')}</td>
+      <td class="num">${money(pt.total_amount)}</td>
+      <td>${delegationStatusBadge(pt.delegations_status)}</td>
+      <td><div class="flex gap-8 wrap">
+        ${attachBtnHTML(pt.file)}
+        <button class="btn btn-ghost btn-sm" onclick="Modals.viewParticipant('${pt.delegation_id}')">تفاصيل</button>
+        ${canApprove?`<button class="btn btn-primary btn-sm" onclick="Actions.approveParticipant('${pt.delegation_id}')">اعتماد</button><button class="btn btn-danger btn-sm" onclick="Actions.rejectParticipant('${pt.delegation_id}')">رفض</button>`:''}
+      </div></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
+
+  const canAddExpense = Perm.canManageOtherExpenses(u,t);
+  const expenseRows = f.otherExp.length ? f.otherExp.map(e=>{
+    const canApprove = e.expense_status==='غير معتمد' && Perm.canApproveOtherExpense(u) && sameFed;
+    return `<tr>
+      <td>${esc(e.expense_type||'—')}</td>
+      <td>${esc(e.beneficiary||'—')}</td>
+      <td class="num">${money(e.amount)}</td>
+      <td>${expenseStatusBadge(e.expense_status)}</td>
+      <td><div class="flex gap-8 wrap">${attachBtnHTML(e.file)}
+        ${canApprove?`<button class="btn btn-primary btn-sm" onclick="Actions.approveOtherExpense('${e.expense_id}')">اعتماد</button><button class="btn btn-danger btn-sm" onclick="Actions.cancelOtherExpense('${e.expense_id}')">إلغاء</button>`:''}
+      </div></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5"><div class="empty-row">لا توجد مصاريف أخرى بعد</div></td></tr>`;
+
+  return `
+    <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('trips')">‹ رجوع لقائمة الرحلات</button>
+    <div class="card card-pad mt-8">
+      <div class="section-head" style="margin-bottom:8px;">
+        <div><div class="eyebrow">${esc(fed?fed.federation_name_ar:'—')}</div><h2>${esc(t.trip_name_ar)}</h2><div class="muted small">${esc(t.trip_name_en||'')}</div></div>
+        <div class="flex gap-8 wrap">${tripStatusBadge(t.trip_status)}${actionBtns.join('')}</div>
+      </div>
+      <div class="kv-grid mt-16">
+        <div><div class="kv-lbl">نوع الرحلة</div><div class="kv-val">${esc(t.trip_type||'—')}</div></div>
+        <div><div class="kv-lbl">إلى أين</div><div class="kv-val">${esc(t.entity||'—')}</div></div>
+        <div><div class="kv-lbl">تاريخ البداية</div><div class="kv-val">${fmtDate(t.start_date)}</div></div>
+        <div><div class="kv-lbl">تاريخ النهاية</div><div class="kv-val">${fmtDate(t.end_date)}</div></div>
+        <div><div class="kv-lbl">عدد الأيام</div><div class="kv-val">${esc(t.trip_days_count||'—')}</div></div>
+        <div><div class="kv-lbl">مقدّم الطلب</div><div class="kv-val">${esc(requester?requester.employee_name_ar:'—')}</div></div>
+        <div><div class="kv-lbl">يشمل نقل؟</div><div class="kv-val">${t.is_transportation_available?'نعم':'لا'}</div></div>
+        <div><div class="kv-lbl">يشمل سكن؟</div><div class="kv-val">${t.is_accommodation_available?'نعم':'لا'}</div></div>
+        <div style="grid-column:1/-1;"><div class="kv-lbl">مراكز التكلفة</div><div class="kv-val">${esc(ccNames)}</div></div>
+        ${t.justifications?`<div style="grid-column:1/-1;"><div class="kv-lbl">المبررات</div><div class="kv-val">${esc(t.justifications)}</div></div>`:''}
+        ${t.desired_results?`<div style="grid-column:1/-1;"><div class="kv-lbl">الأهداف المطلوب تحقيقها</div><div class="kv-val">${esc(t.desired_results)}</div></div>`:''}
+        ${t.achieved_results?`<div style="grid-column:1/-1;"><div class="kv-lbl">الأهداف المحققة</div><div class="kv-val">${esc(t.achieved_results)}</div></div>`:''}
+      </div>
+      <div class="flex gap-16 wrap mt-16">
+        <span class="chip" style="cursor:default;">مقدّم الطلب: ${esc(requester?requester.employee_name_ar:'—')}</span>
+        <span class="chip" style="cursor:default;">معتمد التكليف: ${esc(approver?approver.employee_name_ar:'— لم يتم بعد —')}</span>
+        <span class="chip" style="cursor:default;">مقفل الرحلة: ${esc(closer?closer.employee_name_ar:'— لم يتم بعد —')}</span>
+      </div>
+    </div>
+
+    <div class="card mt-24">
+      <div class="card-pad" style="padding-bottom:0;">
+        <div class="section-head" style="margin-bottom:12px;">
+          <h2 style="font-size:15px;">👥 المشاركون في الانتداب (تذاكر السفر)</h2>
+          ${canAddParticipant ? `<button class="btn btn-outline btn-sm" onclick="Modals.addParticipant('${t.trip_id}')">+ إضافة مشارك</button>` : ''}
+        </div>
+      </div>
+      <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
+        <table class="tbl"><thead><tr><th>المشارك</th><th>نوع التذكرة</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead>
+        <tbody>${participantRows}</tbody></table>
+      </div>
+    </div>
+
+    <div class="card mt-24">
+      <div class="card-pad" style="padding-bottom:0;">
+        <div class="section-head" style="margin-bottom:12px;">
+          <h2 style="font-size:15px;">🧾 المصاريف الأخرى</h2>
+          ${canAddExpense ? `<button class="btn btn-outline btn-sm" onclick="Modals.addOtherExpense('${t.trip_id}')">+ إضافة مصروف</button>` : ''}
+        </div>
+      </div>
+      <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
+        <table class="tbl"><thead><tr><th>نوع المصروف</th><th>المستفيد</th><th>المبلغ</th><th>الحالة</th><th></th></tr></thead>
+        <tbody>${expenseRows}</tbody></table>
+      </div>
+    </div>
+  `;
+};
+
+Modals.editTrip = function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const fedCC = DB.cost_centers.filter(x=>x.federation_id===t.federation_number);
+  const selectedCC = tripCostCenterIds(t);
+  const typeOpts = TRIP_TYPES.map(x=>`<option value="${esc(x)}" ${t.trip_type===x?'selected':''}>${esc(x)}</option>`).join('');
+  const entityOpts = ENTITIES.map(x=>`<option value="${esc(x)}" ${t.entity===x?'selected':''}>${esc(x)}</option>`).join('');
+  const ccChips = fedCC.map(cc=>`<span class="chip ${selectedCC.includes(cc.cost_center_id)?'on':''}" onclick="this.classList.toggle('on')" data-cc="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</span>`).join('');
+  const body = `
+    <div class="form-grid">
+      <div class="field full"><label>اسم الرحلة (عربي)</label><input type="text" id="etNameAr" value="${esc(t.trip_name_ar||'')}"></div>
+      <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" id="etNameEn" value="${esc(t.trip_name_en||'')}"></div>
+      <div class="field"><label>نوع الرحلة</label><select id="etType">${typeOpts}</select></div>
+      <div class="field"><label>إلى أين</label><select id="etEntity">${entityOpts}</select></div>
+      <div class="field"><label>تاريخ البداية</label><input type="date" id="etStart" value="${t.start_date?String(t.start_date).slice(0,10):''}"></div>
+      <div class="field"><label>تاريخ النهاية</label><input type="date" id="etEnd" value="${t.end_date?String(t.end_date).slice(0,10):''}"></div>
+      <div class="field full"><label>مراكز التكلفة</label><div class="chip-select" id="etCcSelect">${ccChips}</div></div>
+    </div>`;
+  openModalHTML(modalShell('editTripModal','تعديل بيانات الرحلة', body, true,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.updateTrip('${tripId}')">حفظ التعديل</button>`));
+};
+Actions.updateTrip = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canEditTrip(u,t)){ toast('لا يمكن تعديل هذه الرحلة','danger'); return; }
+  const ccIds = Array.from(document.querySelectorAll('#etCcSelect .chip.on')).map(el=>el.dataset.cc);
+  const start = document.getElementById('etStart').value;
+  const end = document.getElementById('etEnd').value;
+  const days = (start&&end) ? Math.max(1, Math.round((new Date(end)-new Date(start))/86400000)+1) : t.trip_days_count;
+  const patch = {
+    trip_name_ar: document.getElementById('etNameAr').value,
+    trip_name_en: document.getElementById('etNameEn').value,
+    trip_type: document.getElementById('etType').value,
+    entity: document.getElementById('etEntity').value,
+    start_date: start||null, end_date: end||null, trip_days_count: days,
+    cost_centers_id: ccIds.join(',')
+  };
+  const saved = await dbUpdate('trips','trip_id',tripId,patch);
+  if(!saved) return;
+  closeModal(); toast('تم حفظ التعديل','success'); App.go('tripDetail',{id:tripId});
+};
+
+Actions.approveTripAssignment = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canApproveTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'اعتماد التكليف', request_approved_by:u.user_id, request_approval_date:nowISO() });
+  if(!saved) return;
+  toast('تم اعتماد التكليف','success'); App.render();
+};
+Actions.rejectTrip = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canApproveTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الرفض','danger'); return; }
+  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'مرفوضة' });
+  if(!saved) return;
+  toast('تم رفض طلب الرحلة','success'); App.render();
+};
+Actions.startDisbursement = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canStartDisbursement(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية بدء الصرف','danger'); return; }
+  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'الصرف' });
+  if(!saved) return;
+  toast('بدأت مرحلة الصرف','success'); App.render();
+};
+Modals.closeTrip = function(tripId){
+  const body = `
+    <div class="alert alert-info">إقفال الرحلة يتطلب تسجيل الأهداف التي تم تحقيقها فعليًا.</div>
+    <div class="field full mt-8"><label>الأهداف المحققة <span class="muted">— إلزامي</span></label><textarea rows="4" id="ctAchieved" placeholder="اكتب الأهداف والنتائج التي تحققت من هذه الرحلة..."></textarea></div>
+  `;
+  openModalHTML(modalShell('closeTripModal','إقفال الرحلة', body, false,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.closeTrip('${tripId}')">تأكيد الإقفال</button>`));
+};
+Actions.closeTrip = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canCloseTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الإقفال','danger'); return; }
+  const achieved = document.getElementById('ctAchieved').value.trim();
+  if(!achieved){ toast('الرجاء تسجيل الأهداف المحققة قبل الإقفال','danger'); return; }
+  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'الإقفال', achieved_results:achieved, closure_approved_by:u.user_id, closure_approval_date:nowISO() });
+  if(!saved) return;
+  closeModal(); toast('تم إقفال الرحلة','success'); App.go('tripDetail',{id:tripId});
+};
+
+/* ============================= Participants (delegations / tickets) ============================= */
+Modals.addParticipant = function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  const fedUsers = DB.users.filter(x=>x.federation_id===t.federation_number && x.user_status==='مفتوح');
+  const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}">${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
+  const ticketOpts = TICKET_TYPES.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');
+  const body = `
+    <div class="form-grid">
+      <div class="field full"><label>المشارك</label><select id="dgUser">${usersOpts}</select></div>
+      <div class="field"><label>تاريخ البداية</label><input type="date" id="dgStart"></div>
+      <div class="field"><label>تاريخ النهاية</label><input type="date" id="dgEnd"></div>
+      <div class="field"><label>نوع التذكرة</label><select id="dgTicketType">${ticketOpts}</select></div>
+      <div class="field"><label>سفر بسيارة؟</label><select id="dgCar"><option value="false">لا</option><option value="true">نعم</option></select></div>
+      <div class="field"><label>يشمل نقل؟</label><select id="dgTransport"><option value="false">لا</option><option value="true">نعم</option></select></div>
+      <div class="field"><label>يشمل سكن؟</label><select id="dgAccom"><option value="false">لا</option><option value="true">نعم</option></select></div>
+      <div class="field"><label>سعر التذكرة</label><input type="number" id="dgTicketPrice" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>بدل الانتداب (يومي/إجمالي)</label><input type="number" id="dgAmount" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>عدد الساعات (إن وجد)</label><input type="number" id="dgHours" min="0" step="0.5"></div>
+      <div class="field full"><label>المبرر</label><textarea rows="2" id="dgJustification"></textarea></div>
+      <div class="field full"><label>مرفق (تذكرة/إثبات)</label><input type="file" id="dgFile" accept="image/*,.pdf"></div>
+    </div>`;
+  openModalHTML(modalShell('addParticipantModal','إضافة مشارك للانتداب', body, true,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveParticipant('${tripId}')">حفظ</button>`));
+};
+Actions.saveParticipant = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canManageParticipants(u,t)){ toast('لا تملك صلاحية إضافة مشارك','danger'); return; }
+  const userId = document.getElementById('dgUser').value;
+  const target = userById(userId);
+  const ticketPrice = Number(document.getElementById('dgTicketPrice').value||0);
+  const amount = Number(document.getElementById('dgAmount').value||0);
+  const start = document.getElementById('dgStart').value;
+  const end = document.getElementById('dgEnd').value;
+  const days = (start&&end) ? Math.max(1, Math.round((new Date(end)-new Date(start))/86400000)+1) : null;
+  let filePath = null;
+  const fileInput = document.getElementById('dgFile');
+  if(fileInput.files[0]){
+    const up = await apiUpload(fileInput.files[0], 'delegations');
+    if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
+    filePath = up.data.path;
+  }
+  const saved = await dbInsert('delegations', {
+    delegation_id: uid('dlg'), trip_id: tripId, federation_number: t.federation_number,
+    delegations_status:'غير معتمد', user_type: target?target.user_type:null, user_id:userId,
+    amount_delegations: amount, is_linked_to_trip:true, justification: document.getElementById('dgJustification').value,
+    delegation_days_count: days, start_date:start||null, end_date:end||null,
+    is_transportation_available: document.getElementById('dgTransport').value==='true',
+    is_accommodation_available: document.getElementById('dgAccom').value==='true',
+    achieved_goal:null, hours_count: document.getElementById('dgHours').value?Number(document.getElementById('dgHours').value):null,
+    ticket_type: document.getElementById('dgTicketType').value, is_car_traveler: document.getElementById('dgCar').value==='true',
+    ticket_price: ticketPrice, total_amount: ticketPrice+amount, file: filePath,
+    created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
+  });
+  if(!saved) return;
+  closeModal(); toast('تمت إضافة المشارك — بانتظار الاعتماد','success'); App.go('tripDetail',{id:tripId});
+};
+Modals.viewParticipant = function(delegationId){
+  const d = DB.delegations.find(x=>x.delegation_id===delegationId);
+  const rows = [
+    ['المشارك', userLabel(d.user_id)],
+    ['نوع المستخدم', d.user_type||'—'],
+    ['تاريخ البداية', fmtDate(d.start_date)],
+    ['تاريخ النهاية', fmtDate(d.end_date)],
+    ['عدد الأيام', d.delegation_days_count||'—'],
+    ['نوع التذكرة', d.ticket_type||'—'],
+    ['سفر بسيارة؟', d.is_car_traveler?'نعم':'لا'],
+    ['يشمل نقل؟', d.is_transportation_available?'نعم':'لا'],
+    ['يشمل سكن؟', d.is_accommodation_available?'نعم':'لا'],
+    ['سعر التذكرة', money(d.ticket_price)],
+    ['بدل الانتداب', money(d.amount_delegations)],
+    ['الإجمالي', money(d.total_amount)],
+    ['المبرر', d.justification||'—'],
+    ['الهدف المحقق', d.achieved_goal||'—'],
+    ['الحالة', d.delegations_status],
+  ];
+  const body = `<table class="print-kv" style="margin-top:0;">${rows.map(r=>`<tr><td class="lbl">${esc(r[0])}</td><td class="val">${esc(String(r[1]))}</td></tr>`).join('')}</table>
+    ${d.file?`<div class="mt-12">${attachBtnHTML(d.file)}</div>`:''}`;
+  openModalHTML(modalShell('viewParticipantModal','تفاصيل المشارك', body, false, ''));
+};
+Actions.approveParticipant = async function(delegationId){
+  const u = Session.user;
+  if(!Perm.canApproveParticipant(u)){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
+  if(!saved) return;
+  toast('تم اعتماد المشارك','success'); App.render();
+};
+Actions.rejectParticipant = async function(delegationId){
+  const u = Session.user;
+  if(!Perm.canApproveParticipant(u)){ toast('لا تملك صلاحية الرفض','danger'); return; }
+  const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'مرفوض' });
+  if(!saved) return;
+  toast('تم رفض المشارك','success'); App.render();
+};
+
+/* ============================= Other expenses ============================= */
+Modals.addOtherExpense = function(tripId){
+  const body = `
+    <div class="form-grid">
+      <div class="field"><label>نوع المصروف</label><input type="text" id="oeType" placeholder="مثال: تذاكر إضافية، اتصالات..."></div>
+      <div class="field"><label>المستفيد</label><input type="text" id="oeBeneficiary"></div>
+      <div class="field"><label>المبلغ</label><input type="number" id="oeAmount" min="0" step="0.01"></div>
+      <div class="field full"><label>المبرر / البيان</label><textarea rows="2" id="oeJustification"></textarea></div>
+      <div class="field full"><label>مرفق</label><input type="file" id="oeFile" accept="image/*,.pdf"></div>
+    </div>`;
+  openModalHTML(modalShell('addOtherExpenseModal','إضافة مصروف آخر', body, false,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveOtherExpense('${tripId}')">حفظ</button>`));
+};
+Actions.saveOtherExpense = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  const u = Session.user;
+  if(!Perm.canManageOtherExpenses(u,t)){ toast('لا تملك صلاحية إضافة مصروف','danger'); return; }
+  const amt = Number(document.getElementById('oeAmount').value||0);
+  if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
+  let filePath = null;
+  const fileInput = document.getElementById('oeFile');
+  if(fileInput.files[0]){
+    const up = await apiUpload(fileInput.files[0], 'other_expenses');
+    if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
+    filePath = up.data.path;
+  }
+  const saved = await dbInsert('other_expenses', {
+    expense_id: uid('oex'), trip_id: tripId, federation_number: t.federation_number, expense_status:'غير معتمد',
+    expense_type: document.getElementById('oeType').value, beneficiary: document.getElementById('oeBeneficiary').value,
+    justification: document.getElementById('oeJustification').value, amount: amt, file: filePath,
+    created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
+  });
+  if(!saved) return;
+  closeModal(); toast('تمت إضافة المصروف — بانتظار الاعتماد','success'); App.go('tripDetail',{id:tripId});
+};
+Actions.approveOtherExpense = async function(expenseId){
+  const u = Session.user;
+  if(!Perm.canApproveOtherExpense(u)){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
+  if(!saved) return;
+  toast('تم اعتماد المصروف','success'); App.render();
+};
+Actions.cancelOtherExpense = async function(expenseId){
+  const u = Session.user;
+  if(!Perm.canApproveOtherExpense(u)){ toast('لا تملك صلاحية الإلغاء','danger'); return; }
+  const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'ملغى' });
+  if(!saved) return;
+  toast('تم إلغاء المصروف','success'); App.render();
+};
+
+/* ============================= Tickets (all delegations) list ============================= */
+Views.tickets = function(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  let list = DB.delegations.filter(d=>tripIds.has(d.trip_id)).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const sumAmt = list.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const stats = `<div class="stats-grid">
+    <div class="stat-card accent-teal"><div class="lbl">عدد التذاكر/المشاركات</div><div class="val num">${list.length}</div></div>
+    <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ</div><div class="val num">${money(sumAmt)}</div></div>
+  </div>`;
+  const rows = list.length ? list.map(d=>{
+    const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+    return `<tr class="clickable-row" onclick="App.go('tripDetail',{id:'${d.trip_id}'})">
+      <td><b>${esc(userLabel(d.user_id))}</b><div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
+      <td>${esc(d.ticket_type||'—')}</td>
+      <td class="num">${money(d.ticket_price)}</td>
+      <td class="num">${money(d.total_amount)}</td>
+      <td>${delegationStatusBadge(d.delegations_status)}</td>
+      <td>${fmtDate(d.created_at)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6"><div class="empty-row">لا توجد تذاكر بعد</div></td></tr>`;
+  return `
+    <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div></div>
+    ${stats}
+    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>المشارك / الرحلة</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  `;
+};
+
+/* ============================= Other expenses list ============================= */
+Views.otherExpenses = function(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  let list = DB.other_expenses.filter(e=>tripIds.has(e.trip_id)).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const sumAmt = list.reduce((s,e)=>s+Number(e.amount||0),0);
+  const stats = `<div class="stats-grid">
+    <div class="stat-card accent-teal"><div class="lbl">عدد المصاريف</div><div class="val num">${list.length}</div></div>
+    <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ</div><div class="val num">${money(sumAmt)}</div></div>
+  </div>`;
+  const rows = list.length ? list.map(e=>{
+    const t = DB.trips.find(x=>x.trip_id===e.trip_id);
+    return `<tr class="clickable-row" onclick="App.go('tripDetail',{id:'${e.trip_id}'})">
+      <td><b>${esc(e.expense_type||'—')}</b><div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
+      <td>${esc(e.beneficiary||'—')}</td>
+      <td class="num">${money(e.amount)}</td>
+      <td>${expenseStatusBadge(e.expense_status)}</td>
+      <td>${fmtDate(e.created_at)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5"><div class="empty-row">لا توجد مصاريف بعد</div></td></tr>`;
+  return `
+    <div class="section-head"><div><div class="eyebrow">المصاريف الأخرى</div><h2>مصاريف مرتبطة بالرحلات</h2></div></div>
+    ${stats}
+    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>النوع / الرحلة</th><th>المستفيد</th><th>المبلغ</th><th>الحالة</th><th>التاريخ</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  `;
+};
+
+/* ============================= Users (نفس نمط نظام العهد) ============================= */
+Views.users = function(){
+  const u = Session.user;
+  const list = visibleUsers(u).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const addBtn = Perm.canManageUsers(u) ? `<button class="btn btn-primary" onclick="Modals.addUser()">+ إضافة مستخدم</button>` : '';
+  const rows = list.length ? list.map(x=>{
+    const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
+    const canEdit = Perm.canEditUser(u,x);
+    return `<tr>
+      <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
+      <td>${esc(x.user_type||'—')}</td>
+      <td>${esc(x.phone||'—')}</td>
+      <td>${userStatusBadge(x.user_status)}</td>
+      <td><div class="flex gap-8 wrap">
+        <button class="btn btn-ghost btn-sm" onclick="App.go('userDetail',{id:'${x.user_id}'})">عرض</button>
+        ${canEdit?`<button class="btn btn-ghost btn-sm" onclick="Modals.editUser('${x.user_id}')">تعديل</button>`:''}
+        ${canChangeStatus && x.user_status==='تحت المعالجة'?`<button class="btn btn-primary btn-sm" onclick="Actions.setUserStatus('${x.user_id}','مفتوح')">تفعيل</button>`:''}
+        ${canChangeStatus && x.user_status==='مفتوح'?`<button class="btn btn-danger btn-sm" onclick="Actions.setUserStatus('${x.user_id}','مغلق')">إغلاق</button>`:''}
+      </div></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5"><div class="empty-row">لا يوجد مستخدمون</div></td></tr>`;
+  return `
+    <div class="section-head"><div><div class="eyebrow">المستخدمون</div><h2>إدارة المستخدمين</h2></div>${addBtn}</div>
+    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>المستخدم</th><th>النوع</th><th>الجوال</th><th>الحالة</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  `;
+};
+Modals.addUser = function(){
+  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
+  const body = `
+    <div class="form-grid">
+      <div class="field"><label>الاسم (عربي)</label><input type="text" id="nuNameAr"></div>
+      <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="nuNameEn"></div>
+      <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
+      <div class="field"><label>المسمى الوظيفي</label><input type="text" id="nuJob"></div>
+      <div class="field"><label>الجوال</label><input type="text" id="nuPhone"></div>
+      <div class="field"><label>البريد الإلكتروني</label><input type="email" id="nuEmail"></div>
+      <div class="field"><label>اسم المستخدم (دخول)</label><input type="text" id="nuUsername"></div>
+      <div class="field"><label>كلمة المرور</label><input type="text" id="nuPassword"></div>
+    </div>`;
+  openModalHTML(modalShell('addUserModal','إضافة مستخدم', body, true,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveUser()">حفظ</button>`));
+};
+Actions.saveUser = async function(){
+  const u = Session.user;
+  const username = document.getElementById('nuUsername').value.trim();
+  const password = document.getElementById('nuPassword').value;
+  if(!username || !password){ toast('اسم المستخدم وكلمة المرور إلزاميان','danger'); return; }
+  const obj = {
+    user_id: uid('usr'), federation_id: u.federation_id, user_status:'تحت المعالجة',
+    employee_name_ar: document.getElementById('nuNameAr').value, employee_name_en: document.getElementById('nuNameEn').value,
+    national_id:null, nationality:null, phone: document.getElementById('nuPhone').value, email: document.getElementById('nuEmail').value,
+    user_name: username, password: password, user_type: document.getElementById('nuType').value,
+    Job_Title: document.getElementById('nuJob').value, language:'ar', created_at: nowISO(), created_by: u.user_id
+  };
+  const saved = await dbInsertUser(obj);
+  if(!saved) return;
+  closeModal(); toast('تمت إضافة المستخدم — بانتظار التفعيل','success'); App.render();
+};
+Modals.editUser = function(userId){
+  const x = DB.users.find(u2=>u2.user_id===userId);
+  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}" ${x.user_type===t?'selected':''}>${t}</option>`).join('');
+  const body = `
+    <div class="form-grid">
+      <div class="field"><label>الاسم (عربي)</label><input type="text" id="euNameAr" value="${esc(x.employee_name_ar||'')}"></div>
+      <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="euNameEn" value="${esc(x.employee_name_en||'')}"></div>
+      <div class="field"><label>نوع المستخدم</label><select id="euType">${typeOpts}</select></div>
+      <div class="field"><label>المسمى الوظيفي</label><input type="text" id="euJob" value="${esc(x.Job_Title||'')}"></div>
+      <div class="field"><label>الجوال</label><input type="text" id="euPhone" value="${esc(x.phone||'')}"></div>
+      <div class="field"><label>البريد الإلكتروني</label><input type="email" id="euEmail" value="${esc(x.email||'')}"></div>
+    </div>`;
+  openModalHTML(modalShell('editUserModal','تعديل بيانات المستخدم', body, true,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.updateUser('${userId}')">حفظ</button>`));
+};
+Actions.updateUser = async function(userId){
+  const u = Session.user;
+  const x = DB.users.find(u2=>u2.user_id===userId);
+  if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم','danger'); return; }
+  const patch = {
+    employee_name_ar: document.getElementById('euNameAr').value, employee_name_en: document.getElementById('euNameEn').value,
+    user_type: document.getElementById('euType').value, Job_Title: document.getElementById('euJob').value,
+    phone: document.getElementById('euPhone').value, email: document.getElementById('euEmail').value
+  };
+  const saved = await dbUpdateUser(userId, patch);
+  if(!saved) return;
+  closeModal(); toast('تم حفظ التعديل','success'); App.render();
+};
+Actions.setUserStatus = async function(userId,status){
+  const u = Session.user;
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!Perm.canChangeUserStatus(u) || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
+  const saved = await dbUpdateUser(userId, { user_status: status });
+  if(!saved) return;
+  toast('تم تحديث حالة المستخدم','success'); App.render();
+};
+
+Views.userDetail = function(userId){
+  const u = Session.user;
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!target) return `<div class="card card-pad">لم يتم العثور على المستخدم.</div>`;
+  const canSee = Perm.isAuditor(u) || target.federation_id===u.federation_id;
+  if(!canSee) return `<div class="card card-pad">لا تملك صلاحية عرض بيانات هذا المستخدم.</div>`;
+  const fed = federationById(target.federation_id);
+  const trips = DB.trips.filter(t=>t.created_by===userId);
+  const rows = trips.length ? trips.map(t=>`
+    <tr class="clickable-row" onclick="App.go('tripDetail',{id:'${t.trip_id}'})">
+      <td><b>${esc(t.trip_name_ar||'—')}</b></td><td>${tripStatusBadge(t.trip_status)}</td><td>${fmtDate(t.start_date)}</td><td>${fmtDate(t.created_at)}</td>
+    </tr>`).join('') : `<tr><td colspan="4"><div class="empty-row">لا توجد رحلات لهذا المستخدم</div></td></tr>`;
+  return `
+    <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
+    <div class="card card-pad mt-8">
+      <div class="flex center gap-16">
+        <div class="sb-avatar" style="width:56px;height:56px;border-radius:50%;background:var(--teal-soft);color:var(--teal-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;">${esc((target.employee_name_ar||'?').trim()[0]||'?')}</div>
+        <div><h2 style="margin:0;">${esc(target.employee_name_ar)}</h2><div class="muted small">${esc(target.Job_Title||target.user_type)} · ${esc(fed?fed.federation_name_ar:'—')}</div></div>
+        <div style="margin-inline-start:auto;">${userStatusBadge(target.user_status)}</div>
+      </div>
+      <div class="kv-grid mt-16">
+        <div><div class="kv-lbl">اسم المستخدم</div><div class="kv-val">${esc(target.user_name)}</div></div>
+        <div><div class="kv-lbl">الجوال</div><div class="kv-val">${esc(target.phone||'—')}</div></div>
+        <div><div class="kv-lbl">البريد الإلكتروني</div><div class="kv-val">${esc(target.email||'—')}</div></div>
+        <div><div class="kv-lbl">تاريخ الانضمام</div><div class="kv-val">${fmtDate(target.created_at)}</div></div>
+      </div>
+    </div>
+    <h3 class="block-title mt-24">الرحلات المقدَّمة من هذا المستخدم</h3>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>الرحلة</th><th>الحالة</th><th>تاريخ البداية</th><th>تاريخ الطلب</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+  `;
+};
+
+/* ============================= Cost centers ============================= */
+Views.costcenters = function(){
+  const u = Session.user;
+  const list = visibleCostCenters(u);
+  const addBtn = Perm.canManageCostCenters(u) ? `<button class="btn btn-primary" onclick="Modals.addCostCenter()">+ إضافة مركز فرعي</button>` : '';
+  const rows = list.length ? list.map(cc=>`
+    <tr><td>${esc(cc.cost_center_name_ar)}</td><td>${esc(cc.parent_cost_center_id?costCenterLabel(cc.parent_cost_center_id):'— رئيسي —')}</td><td>${fmtDate(cc.created_at)}</td></tr>
+  `).join('') : `<tr><td colspan="3"><div class="empty-row">لا توجد مراكز تكلفة</div></td></tr>`;
+  return `
+    <div class="section-head"><div><div class="eyebrow">مراكز التكلفة</div><h2>مراكز التكلفة</h2></div>${addBtn}</div>
+    <div class="alert alert-info mt-16">مراكز التكلفة مشتركة مع نظام العهد النقدية — أي تعديل هنا ينعكس هناك والعكس صحيح.</div>
+    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>الاسم</th><th>تابع لـ</th><th>تاريخ الإضافة</th></tr></thead><tbody>${rows}</tbody></table></div>
+  `;
+};
+Modals.addCostCenter = function(){
+  const u = Session.user;
+  const mainCenters = DB.cost_centers.filter(c=>c.federation_id===u.federation_id && !c.parent_cost_center_id);
+  const opts = mainCenters.map(c=>`<option value="${c.cost_center_id}">${esc(c.cost_center_name_ar)}</option>`).join('');
+  const body = `
+    <div class="field"><label>المركز الرئيسي التابع له</label><select id="ccParent">${opts}</select></div>
+    <div class="field"><label>اسم المركز الفرعي (عربي)</label><input type="text" id="ccNameAr"></div>
+    <div class="field"><label>اسم المركز الفرعي (إنجليزي)</label><input type="text" id="ccNameEn"></div>
+  `;
+  openModalHTML(modalShell('addCcModal','إضافة مركز تكلفة فرعي', body, false,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveCostCenter()">حفظ</button>`));
+};
+Actions.saveCostCenter = async function(){
+  const u = Session.user;
+  const nameAr = document.getElementById('ccNameAr').value.trim();
+  if(!nameAr){ toast('اسم المركز إلزامي','danger'); return; }
+  const saved = await dbInsert('cost_centers', {
+    cost_center_id: uid('cc'), federation_id: u.federation_id, parent_cost_center_id: document.getElementById('ccParent').value,
+    cost_center_name_ar: nameAr, cost_center_name_en: document.getElementById('ccNameEn').value,
+    created_by: u.user_id, created_at: nowISO()
+  });
+  if(!saved) return;
+  closeModal(); toast('تمت الإضافة','success'); App.render();
+};
+
+/* ============================= Federations ============================= */
+Views.federations = function(){
+  const u = Session.user;
+  const isAud = Perm.isAuditor(u);
+  const list = isAud ? DB.federations.slice() : DB.federations.filter(f=>f.federation_id===u.federation_id);
+  const rows = list.map(f=>`
+    <tr><td><b>${esc(f.federation_name_ar)}</b></td><td>${esc(f.federation_name_en||'—')}</td><td>${fmtDate(f.created_at)}</td></tr>
+  `).join('') || `<tr><td colspan="3"><div class="empty-row">لا توجد اتحادات</div></td></tr>`;
+  return `
+    <div class="section-head"><div><div class="eyebrow">${isAud?'صلاحية المراجع':'بيانات الاتحاد'}</div><h2>${isAud?'الاتحادات':'اتحادك'}</h2></div></div>
+    <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>الاسم (عربي)</th><th>الاسم (إنجليزي)</th><th>تاريخ الإضافة</th></tr></thead><tbody>${rows}</tbody></table></div>
+  `;
+};
+
+/* ============================= Profile ============================= */
+Views.profile = function(){
+  const u = Session.user;
+  return `
+    <div class="card card-pad">
+      <h2 style="margin-top:0;">ملفي الشخصي</h2>
+      <div class="kv-grid mt-16">
+        <div><div class="kv-lbl">الاسم</div><div class="kv-val">${esc(u.employee_name_ar)}</div></div>
+        <div><div class="kv-lbl">نوع المستخدم</div><div class="kv-val">${esc(u.user_type)}</div></div>
+        <div><div class="kv-lbl">اسم المستخدم</div><div class="kv-val">${esc(u.user_name)}</div></div>
+        <div><div class="kv-lbl">الجوال</div><div class="kv-val">${esc(u.phone||'—')}</div></div>
+      </div>
+    </div>
+    <div class="card card-pad mt-16">
+      <h3 style="margin-top:0;">تغيير كلمة المرور</h3>
+      <div class="form-grid">
+        <div class="field"><label>كلمة المرور الحالية</label><input type="password" id="pfOld"></div>
+        <div class="field"><label>كلمة المرور الجديدة</label><input type="password" id="pfNew"></div>
+      </div>
+      <button class="btn btn-primary mt-8" onclick="Actions.changePassword()">تحديث كلمة المرور</button>
+    </div>
+  `;
+};
+Actions.changePassword = async function(){
+  const oldP = document.getElementById('pfOld').value;
+  const newP = document.getElementById('pfNew').value;
+  if(!oldP || !newP){ toast('أكمل الحقلين','danger'); return; }
+  const { data, error } = await apiCall({ op:'rpc', fn:'change_password', args:{ p_user_id: Session.user.user_id, p_old_password: oldP, p_new_password: newP } });
+  if(error){ toast('تعذّر تحديث كلمة المرور: '+error.message,'danger'); return; }
+  if(data===false){ toast('كلمة المرور الحالية غير صحيحة','danger'); return; }
+  toast('تم تحديث كلمة المرور بنجاح','success');
+  document.getElementById('pfOld').value=''; document.getElementById('pfNew').value='';
+};
+
+document.addEventListener('DOMContentLoaded', function(){ bootApp(); });
 </script>
 </body>
 </html>
