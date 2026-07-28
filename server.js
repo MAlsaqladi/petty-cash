@@ -51,7 +51,8 @@ app.use((req, res, next) => {
    ------------------------------------------------------------------- */
 const ALLOWED_TABLES = new Set([
   'federations', 'users', 'users_public', 'cost_centers', 'expense_types',
-  'custodies', 'custody_budgets', 'custody_transfers', 'custody_closures'
+  'custodies', 'custody_budgets', 'custody_transfers', 'custody_closures',
+  'trips', 'delegations', 'other_expenses'
 ]);
 const ALLOWED_RPC = new Set(['login', 'change_password']);
 
