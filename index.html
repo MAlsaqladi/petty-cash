@@ -696,6 +696,8 @@ Views.home = function(){
   /* ---- quick actions ---- */
   const quickActions = [];
   if(Perm.canRequestCustody(u)) quickActions.push(`<button class="btn btn-primary" onclick="Modals.addCustody()">+ طلب عهدة جديدة</button>`);
+  if(!Perm.isAuditor(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>`);
+  if(!Perm.isAuditor(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>`);
   if(Perm.canTransfer(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>`);
   if(Perm.canManageUsers(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.addUser()">+ إضافة مستخدم</button>`);
 
@@ -940,6 +942,7 @@ Views.budgetsList = function(){
   const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div>
+      ${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>` : ''}
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -1050,6 +1053,7 @@ Views.expensesList = function(){
   const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div>
+      ${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>` : ''}
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -2655,7 +2659,10 @@ Views.userDetail = function(userId){
   if(!canSee) return `<div class="card card-pad">لا تملك صلاحية عرض بيانات هذا المستخدم.</div>`;
   const fed = federationById(target.federation_id);
   return `
-    <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
+    <div class="flex between center">
+      <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
+      <button class="btn btn-outline btn-sm" onclick="Actions.printUserProfile('${userId}')">🖨 طباعة</button>
+    </div>
     <div class="card card-pad mt-8">
       <div class="flex center gap-16">
         <div class="sb-avatar" style="width:56px;height:56px;border-radius:50%;background:var(--teal-soft);color:var(--teal-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;">${esc((target.employee_name_ar||'?').trim()[0]||'?')}</div>
@@ -2717,6 +2724,94 @@ function renderUserCustodyPanel(userId){
     </div>
   `;
 }
+
+/* ============================= طباعة ملف المستخدم (Actions.printUserProfile) ============================= */
+function buildUserProfilePrintHTML(userId){
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!target) return '';
+  const fed = federationById(target.federation_id);
+  const s = userCustodySummary(userId);
+
+  const custodyRows = s.custodies.length ? s.custodies.map(c=>{
+    const f = custodyFinancials(c);
+    return `<tr>
+      <td>${esc(c.description_ar||'بدون وصف')}</td>
+      <td>${esc(c.custody_status||'—')}</td>
+      <td>${money(f.approvedBudget)}</td>
+      <td>${money(f.approvedExpenses)}</td>
+      <td>${money(f.remainingBalance)}</td>
+      <td>${fmtDate(c.created_at)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6"><div class="print-empty">لا توجد عهد لهذا المستخدم</div></td></tr>`;
+
+  const ccRows = s.costCentersUsed.length ? s.costCentersUsed.map(cc=>`
+    <tr><td>${esc(cc.name)}</td><td>${money(cc.amount)}</td></tr>
+  `).join('') : `<tr><td colspan="2"><div class="print-empty">لا توجد مصاريف مسجّلة بعد</div></td></tr>`;
+
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
+            <div class="print-sys-name">نظام إدارة العهد النقدية</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>رقم مرجعي: ${esc(target.user_id)}</div>
+        </div>
+      </div>
+      <h1 class="print-title">الملف الشخصي للمستخدم</h1>
+      <div class="print-subtitle">${esc(target.employee_name_ar||'—')}</div>
+      <div class="print-status-row">
+        <span class="print-status-chip">الحالة: ${esc(target.user_status||'—')}</span>
+        <span class="print-status-chip">نوع المستخدم: ${esc(target.user_type||'—')}</span>
+      </div>
+    </div>
+
+    <table class="print-kv">
+      <tr><td class="lbl">اسم المستخدم</td><td class="val">${esc(target.user_name||'—')}</td><td class="lbl">المسمى الوظيفي</td><td class="val">${esc(target.Job_Title||target.user_type||'—')}</td></tr>
+      <tr><td class="lbl">الجوال</td><td class="val">${esc(target.phone||'—')}</td><td class="lbl">البريد الإلكتروني</td><td class="val">${esc(target.email||'—')}</td></tr>
+      <tr><td class="lbl">تاريخ الانضمام</td><td class="val">${fmtDate(target.created_at)}</td><td class="lbl">الاتحاد</td><td class="val">${esc(fed?fed.federation_name_ar:'—')}</td></tr>
+    </table>
+
+    <div class="print-balance-strip">
+      <div class="print-balance-cell"><div class="lbl">عدد العهد</div><div class="val">${s.custodies.length}</div></div>
+      <div class="print-balance-cell"><div class="lbl">إجمالي الميزانية المعتمدة</div><div class="val">${money(s.approvedBudget)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">إجمالي المصروف المعتمد</div><div class="val">${money(s.approvedExpenses)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">الرصيد المتبقي</div><div class="val">${money(s.remainingBalance)}</div></div>
+    </div>
+
+    <div class="print-section-title">💼 العهد النقدية</div>
+    <table class="print-tbl">
+      <thead><tr><th>العهدة</th><th>الحالة</th><th>الميزانية المعتمدة</th><th>المصروف المعتمد</th><th>الرصيد المتبقي</th><th>تاريخ الطلب</th></tr></thead>
+      <tbody>${custodyRows}</tbody>
+    </table>
+
+    <div class="print-section-title">🏷 مراكز التكلفة المستخدمة</div>
+    <table class="print-tbl">
+      <thead><tr><th>مركز التكلفة</th><th>إجمالي المصروف</th></tr></thead>
+      <tbody>${ccRows}</tbody>
+    </table>
+
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية</div>
+  </div>`;
+}
+
+Actions.printUserProfile = function(userId){
+  let area = document.getElementById('printArea');
+  if(!area){
+    area = document.createElement('div');
+    area.id = 'printArea';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = buildUserProfilePrintHTML(userId);
+  setTimeout(()=>window.print(), 80);
+};
+
 (function guardActionsAgainstDoubleSubmit(){
   let busy = false;
   Object.keys(Actions).forEach(function(name){
