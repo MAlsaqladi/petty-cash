@@ -79,7 +79,7 @@ const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const TRIP_STATUSES = ['طلب','اعتماد التكليف','الصرف','الإقفال','مرفوضة'];
 const TRIP_TYPES = ['مشاركة','بطولة','معسكر','وفود','اجتماعات'];
 const ENTITIES = ['المملكة','أفريقيا والشرق الأوسط','آسيا','أوروبا'];
-const TICKET_TYPES = ['اقتصادية','رجال أعمال','أخرى'];
+const TICKET_TYPES = ['اقتصادية','أعمال'];
 const DELEGATION_STATUSES = ['غير معتمد','معتمد','مرفوض'];
 const EXPENSE_STATUSES = ['غير معتمد','معتمد','ملغى'];
 
@@ -848,6 +848,15 @@ Modals.addParticipantDraft = function(){
     `<button class="btn btn-outline" onclick="Modals.reopenAddTripModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.saveParticipant()">إضافة للقائمة</button>`));
 };
+/* منطق أهلية نوع التذكرة حسب نوع المشارك (المستخدم المختار) نفسه:
+   - رئيس الاتحاد: يقدر يختار اقتصادية أو أعمال بحرية.
+   - مدير تنفيذي: يظهر له حقل "عدد الساعات"، وإذا تجاوزت 6 ساعات يقدر يختار أعمال، وإلا فاقتصادية تلقائيًا.
+   - أي نوع آخر (موظف/محاسب/موارد بشرية/حكم/متعاون/لاعب...): اقتصادية تلقائيًا دائمًا، بدون اختيار. */
+function ticketTypeMode(resolvedType, hoursCount){
+  if(resolvedType==='رئيس الاتحاد') return 'choice';
+  if(resolvedType==='مدير تنفيذي') return (Number(hoursCount||0) > 6) ? 'choice' : 'forced';
+  return 'forced';
+}
 Modals.renderAddParticipantBody = function(){
   const d = ParticipantDraft;
   const t = participantSourceTrip();
@@ -857,20 +866,14 @@ Modals.renderAddParticipantBody = function(){
   const filteredUsers = d.user_type_filter ? fedUsers.filter(x=>x.user_type===d.user_type_filter) : fedUsers;
   const usersOpts = filteredUsers.map(x=>`<option value="${x.user_id}" ${d.user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('') || `<option value="">لا يوجد مستخدمون بهذا النوع</option>`;
   const selectedUser = userById(d.user_id);
-  const resolvedType = selectedUser ? selectedUser.user_type : '—';
-  const ticketOpts = TICKET_TYPES.map(x=>`<option value="${esc(x)}" ${d.ticket_type===x?'selected':''}>${esc(x)}</option>`).join('');
+  const resolvedType = selectedUser ? selectedUser.user_type : null;
   const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
   const total = Number(d.ticket_price||0) + Number(d.amount_delegations||0);
 
-  const matchBlock = d.is_linked_to_trip ? `
-    <div class="field"><label>تاريخ البداية</label><input type="date" value="${esc(t.start_date?String(t.start_date).slice(0,10):'')}" disabled></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" value="${esc(t.end_date?String(t.end_date).slice(0,10):'')}" disabled></div>
-    <div class="field"><label>عدد الأيام</label><input type="text" value="${esc(days||'—')}" disabled></div>
-    <div class="field"><label>يشمل نقل؟</label><input type="text" value="${t.is_transportation_available?'نعم':'لا'}" disabled></div>
-    <div class="field"><label>يشمل سكن؟</label><input type="text" value="${t.is_accommodation_available?'نعم':'لا'}" disabled></div>
-  ` : `
-    <div class="field"><label>تاريخ البداية</label><input type="date" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
+  /* مطابق لتفاصيل الرحلة = نعم → إخفاء تواريخ/أيام/نقل/سكن كليًا (تُنسخ آليًا من الرحلة عند الحفظ) */
+  const matchBlock = d.is_linked_to_trip ? '' : `
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
     <div class="field"><label>عدد الأيام (تلقائي)</label><input type="text" value="${esc(days||'—')}" disabled></div>
     <div class="field"><label>يشمل نقل؟</label><select onchange="Modals.updateParticipantField('is_transportation_available',this.value==='true')">
       <option value="false" ${!d.is_transportation_available?'selected':''}>لا</option><option value="true" ${d.is_transportation_available?'selected':''}>نعم</option></select></div>
@@ -878,22 +881,42 @@ Modals.renderAddParticipantBody = function(){
       <option value="false" ${!d.is_accommodation_available?'selected':''}>لا</option><option value="true" ${d.is_accommodation_available?'selected':''}>نعم</option></select></div>
   `;
 
+  /* نوع التذكرة حسب نوع المشارك المختار */
+  const mode = resolvedType ? ticketTypeMode(resolvedType, d.hours_count) : 'forced';
+  if(mode==='forced' && d.ticket_type!=='اقتصادية'){ d.ticket_type = 'اقتصادية'; }
+  const ticketOpts = TICKET_TYPES.map(x=>`<option value="${esc(x)}" ${d.ticket_type===x?'selected':''}>${esc(x)}</option>`).join('');
+  const ticketBlock = mode==='choice'
+    ? `<div class="field"><label>نوع التذكرة <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('ticket_type',this.value)">${ticketOpts}</select></div>`
+    : `<div class="field"><label>نوع التذكرة</label><input type="text" value="اقتصادية" disabled></div>`;
+  const hoursBlock = resolvedType==='مدير تنفيذي'
+    ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="number" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="Modals.updateParticipantField('hours_count',this.value)"></div>`
+    : '';
+
+  /* تعويض السفر بالسيارة — يظهر فقط إذا كانت وجهة الرحلة "المملكة" */
+  const carBlock = t.entity==='المملكة'
+    ? `<div class="field"><label>تعويض مقابل التذكرة بسبب السفر بالسيارة؟ <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('is_car_traveler',this.value==='true')">
+        <option value="false" ${!d.is_car_traveler?'selected':''}>لا</option><option value="true" ${d.is_car_traveler?'selected':''}>نعم</option></select></div>`
+    : '';
+
+  /* المبرر يظهر فقط إذا كانت غير مطابقة لتفاصيل الرحلة */
+  const justificationBlock = !d.is_linked_to_trip
+    ? `<div class="field full"><label>المبرر <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateParticipantField('justification',this.value)">${esc(d.justification)}</textarea></div>`
+    : '';
+
   return `
     <div class="form-grid">
-      <div class="field"><label>نوع المستخدم (تصفية)</label><select onchange="Modals.updateParticipantTypeFilter(this.value)">${typeFilterOpts}</select></div>
-      <div class="field"><label>المشارك</label><select onchange="Modals.updateParticipantField('user_id',this.value)">${usersOpts}</select></div>
-      <div class="field"><label>نوع الحساب (تلقائي)</label><input type="text" value="${esc(resolvedType)}" disabled></div>
-      <div class="field"><label>مطابق لتفاصيل الرحلة؟</label><select onchange="Modals.updateParticipantField('is_linked_to_trip',this.value==='true')">
+      <div class="field"><label>نوع المستخدم <span class="muted">— تصفية، أو يتحدّد تلقائيًا عند اختيار المشارك</span></label><select onchange="Modals.updateParticipantTypeFilter(this.value)">${typeFilterOpts}</select></div>
+      <div class="field"><label>المشارك <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('user_id',this.value)">${usersOpts}</select></div>
+      <div class="field"><label>مطابق لتفاصيل الرحلة؟ <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('is_linked_to_trip',this.value==='true')">
         <option value="true" ${d.is_linked_to_trip?'selected':''}>نعم</option><option value="false" ${!d.is_linked_to_trip?'selected':''}>لا</option></select></div>
       ${matchBlock}
-      <div class="field"><label>نوع التذكرة</label><select onchange="Modals.updateParticipantField('ticket_type',this.value)">${ticketOpts}</select></div>
-      <div class="field"><label>سفر بسيارة؟</label><select onchange="Modals.updateParticipantField('is_car_traveler',this.value==='true')">
-        <option value="false" ${!d.is_car_traveler?'selected':''}>لا</option><option value="true" ${d.is_car_traveler?'selected':''}>نعم</option></select></div>
-      <div class="field"><label>سعر التذكرة</label><input type="number" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateParticipantAmount('ticket_price',this.value)"></div>
-      <div class="field"><label>بدل الانتداب</label><input type="number" min="0" step="0.01" value="${d.amount_delegations}" oninput="Modals.updateParticipantAmount('amount_delegations',this.value)"></div>
-      <div class="field"><label>عدد الساعات (إن وجد)</label><input type="number" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="Modals.updateParticipantField('hours_count',this.value)"></div>
-      <div class="field full"><label>المبرر</label><textarea rows="2" oninput="Modals.updateParticipantField('justification',this.value)">${esc(d.justification)}</textarea></div>
-      <div class="field full"><label>مرفق (تذكرة/إثبات)</label><input type="file" id="dgFile" accept="image/*,.pdf"></div>
+      ${hoursBlock}
+      ${ticketBlock}
+      ${carBlock}
+      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي</span></label><input type="number" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateParticipantAmount('ticket_price',this.value)"></div>
+      <div class="field"><label>بدل الانتداب <span class="muted">— إلزامي</span></label><input type="number" min="0" step="0.01" value="${d.amount_delegations}" oninput="Modals.updateParticipantAmount('amount_delegations',this.value)"></div>
+      ${justificationBlock}
+      <div class="field full"><label>مرفق (تذكرة/إثبات) <span class="muted">— إلزامي</span></label><input type="file" id="dgFile" accept="image/*,.pdf"></div>
     </div>
     <div class="mt-12 flex between" id="dgTotalRow" style="font-weight:800;"><span>الإجمالي</span><span class="num" id="dgTotalAmount">${money(total)}</span></div>
   `;
@@ -909,6 +932,11 @@ Modals.updateParticipantTypeFilter = function(val){
 };
 Modals.updateParticipantField = function(key,val){
   ParticipantDraft[key] = val;
+  if(key==='user_id'){
+    // اختيار المشارك مباشرة يحدّث حقل "نوع المستخدم" تلقائيًا ليطابق نوعه الفعلي
+    const su = userById(val);
+    ParticipantDraft.user_type_filter = su ? su.user_type : '';
+  }
   const body = document.getElementById('addParticipantModalBody');
   if(body) body.innerHTML = Modals.renderAddParticipantBody();
 };
@@ -928,6 +956,16 @@ Actions.saveParticipant = async function(){
     if(!Perm.canManageParticipants(u,tripRecord)){ toast('لا تملك صلاحية إضافة مشارك','danger'); return; }
   }
   const target = userById(d.user_id);
+  const resolvedType = target ? target.user_type : null;
+  if(!d.is_linked_to_trip){
+    if(!d.start_date || !d.end_date){ toast('أدخل تاريخ البداية والنهاية','danger'); return; }
+    if(!d.justification || !d.justification.trim()){ toast('المبرر إلزامي عند عدم المطابقة لتفاصيل الرحلة','danger'); return; }
+  }
+  if(resolvedType==='مدير تنفيذي' && !d.hours_count){ toast('أدخل عدد ساعات الرحلة','danger'); return; }
+  if(d.ticket_price===''||d.ticket_price===null||d.ticket_price===undefined||Number(d.ticket_price)<0){ toast('أدخل سعر التذكرة','danger'); return; }
+  if(d.amount_delegations===''||d.amount_delegations===null||d.amount_delegations===undefined||Number(d.amount_delegations)<0){ toast('أدخل بدل الانتداب','danger'); return; }
+  const fileInput0 = document.getElementById('dgFile');
+  if(!fileInput0 || !fileInput0.files[0]){ toast('المرفق إلزامي','danger'); return; }
   const ticketPrice = Number(d.ticket_price||0);
   const amount = Number(d.amount_delegations||0);
   const startDate = d.is_linked_to_trip ? t.start_date : (d.start_date||null);
@@ -935,20 +973,18 @@ Actions.saveParticipant = async function(){
   const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
   const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
   const accom = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
+  const isCarEligible = t.entity==='المملكة';
   let filePath = null;
-  const fileInput = document.getElementById('dgFile');
-  if(fileInput && fileInput.files[0]){
-    const up = await apiUpload(fileInput.files[0], 'delegations');
-    if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
-    filePath = up.data.path;
-  }
+  const up = await apiUpload(fileInput0.files[0], 'delegations');
+  if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
+  filePath = up.data.path;
   const record = {
-    delegation_id: uid('dlg'), delegations_status:'غير معتمد', user_type: target?target.user_type:null, user_id:d.user_id,
-    amount_delegations: amount, is_linked_to_trip: !!d.is_linked_to_trip, justification: d.justification,
+    delegation_id: uid('dlg'), delegations_status:'غير معتمد', user_type: resolvedType, user_id:d.user_id,
+    amount_delegations: amount, is_linked_to_trip: !!d.is_linked_to_trip, justification: d.is_linked_to_trip ? null : d.justification,
     delegation_days_count: days, start_date:startDate, end_date:endDate,
     is_transportation_available: transport, is_accommodation_available: accom,
     achieved_goal:null, hours_count: d.hours_count?Number(d.hours_count):null,
-    ticket_type: d.ticket_type, is_car_traveler: !!d.is_car_traveler,
+    ticket_type: d.ticket_type, is_car_traveler: isCarEligible ? !!d.is_car_traveler : false,
     ticket_price: ticketPrice, total_amount: ticketPrice+amount, file: filePath,
     created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
   };
