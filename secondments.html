@@ -511,8 +511,12 @@ Modals.addTrip = function(){
   TripDraft = {
     federation_number: u.federation_id, trip_name_ar:'', trip_name_en:'', trip_type:TRIP_TYPES[0],
     justifications:'', desired_results:'', cost_center_id: fedCC[0]?fedCC[0].cost_center_id:'', start_date:'', end_date:'', entity:ENTITIES[0],
-    other_notes:'', has_sports_equipment:false, is_transportation_available:false, is_accommodation_available:false
+    other_notes:'', has_sports_equipment:false, is_transportation_available:false, is_accommodation_available:false,
+    participants: []
   };
+  Modals.reopenAddTripModal();
+};
+Modals.reopenAddTripModal = function(){
   openModalHTML(modalShell('addTripModal','طلب رحلة / انتداب جديد', Modals.renderAddTripBody(), true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" id="saveTripBtn" onclick="Actions.saveTrip()" ${isTripDraftValid(TripDraft)?'':'disabled'}>حفظ طلب الرحلة</button>`));
@@ -529,14 +533,21 @@ Modals.renderAddTripBody = function(){
   const typeOpts = TRIP_TYPES.map(t=>`<option value="${esc(t)}" ${d.trip_type===t?'selected':''}>${esc(t)}</option>`).join('');
   const entityOpts = ENTITIES.map(t=>`<option value="${esc(t)}" ${d.entity===t?'selected':''}>${esc(t)}</option>`).join('');
   const ccOpts = fedCC.length ? fedCC.map(cc=>`<option value="${cc.cost_center_id}" ${d.cost_center_id===cc.cost_center_id?'selected':''}>${esc(cc.cost_center_name_ar)}</option>`).join('') : '';
+  const participantsRows = d.participants.length ? d.participants.map((p,idx)=>`
+    <div class="activity-row">
+      <span class="ai">🧍</span>
+      <span class="at grow"><b>${esc(userLabel(p.user_id))}</b> — ${esc(p.ticket_type||'—')} <span class="muted small">(${esc(p.user_type||'—')})</span></span>
+      <span class="atime">${money(p.total_amount)}</span>
+      <button class="btn btn-ghost btn-sm" onclick="Modals.removeDraftParticipant(${idx})">✕ حذف</button>
+    </div>`).join('') : `<div class="empty-row">لا يوجد مشاركون مضافون بعد — يمكنك إضافتهم الآن أو لاحقًا من صفحة تفاصيل الرحلة</div>`;
   return `
   <div class="form-grid">
     <div class="field full"><label>اسم الرحلة (عربي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.trip_name_ar)}" oninput="Modals.updateTripField('trip_name_ar',this.value)"></div>
     <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" value="${esc(d.trip_name_en)}" oninput="Modals.updateTripField('trip_name_en',this.value)"></div>
     <div class="field"><label>نوع الرحلة</label><select onchange="Modals.updateTripField('trip_type',this.value)">${typeOpts}</select></div>
     <div class="field"><label>إلى أين (الجهة)</label><select onchange="Modals.updateTripField('entity',this.value)">${entityOpts}</select></div>
-    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date)}" oninput="Modals.updateTripField('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date)}" oninput="Modals.updateTripField('end_date',this.value)"></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date)}" oninput="Modals.updateTripDates('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date)}" oninput="Modals.updateTripDates('end_date',this.value)"></div>
     <div class="field full"><label>المبررات</label><textarea rows="2" oninput="Modals.updateTripField('justifications',this.value)">${esc(d.justifications)}</textarea></div>
     <div class="field full"><label>الأهداف المطلوب تحقيقها</label><textarea rows="2" oninput="Modals.updateTripField('desired_results',this.value)">${esc(d.desired_results)}</textarea></div>
     <div class="field full"><label>ملاحظات أخرى</label><textarea rows="2" oninput="Modals.updateTripField('other_notes',this.value)">${esc(d.other_notes)}</textarea></div>
@@ -550,12 +561,29 @@ Modals.renderAddTripBody = function(){
       <option value="false" ${!d.is_accommodation_available?'selected':''}>لا</option><option value="true" ${d.is_accommodation_available?'selected':''}>نعم</option></select></div>
     <div class="field"><label>معدّات رياضية مصاحبة؟</label><select onchange="Modals.updateTripField('has_sports_equipment',this.value==='true')">
       <option value="false" ${!d.has_sports_equipment?'selected':''}>لا</option><option value="true" ${d.has_sports_equipment?'selected':''}>نعم</option></select></div>
-  </div>`;
+  </div>
+  <hr class="divider">
+  <div class="subhead"><span class="n">!</span> المشاركون في الانتداب <span class="muted small">— اختياري، يمكن إضافتهم الآن أو لاحقًا</span></div>
+  <div class="card mt-8">${participantsRows}</div>
+  <button class="btn btn-outline btn-sm mt-8" ${(!d.start_date||!d.end_date)?'disabled title="أدخل تاريخ البداية والنهاية أولاً"':''} onclick="Modals.addParticipantDraft()">+ إضافة مشارك</button>
+  `;
 };
 Modals.updateTripField = function(key,val){
   TripDraft[key]=val;
   const saveBtn=document.getElementById('saveTripBtn');
   if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
+};
+Modals.updateTripDates = function(key,val){
+  TripDraft[key]=val;
+  const body = document.getElementById('addTripModalBody');
+  if(body) body.innerHTML = Modals.renderAddTripBody();
+  const saveBtn=document.getElementById('saveTripBtn');
+  if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
+};
+Modals.removeDraftParticipant = function(idx){
+  TripDraft.participants.splice(idx,1);
+  const body = document.getElementById('addTripModalBody');
+  if(body) body.innerHTML = Modals.renderAddTripBody();
 };
 Actions.saveTrip = async function(){
   const u = Session.user;
@@ -576,8 +604,11 @@ Actions.saveTrip = async function(){
   };
   const saved = await dbInsert('trips', trip);
   if(!saved) return;
+  for(const p of d.participants){
+    await dbInsert('delegations', Object.assign({}, p, { trip_id: tripId, federation_number: d.federation_number }));
+  }
   closeModal();
-  toast('تم إرسال طلب الرحلة بنجاح، بانتظار اعتماد التكليف','success');
+  toast(`تم إرسال طلب الرحلة بنجاح${d.participants.length?` مع ${d.participants.length} مشارك`:''} — بانتظار اعتماد التكليف`,'success');
   App.go('tripDetail',{id:tripId});
 };
 
@@ -782,12 +813,20 @@ Actions.closeTrip = async function(tripId){
 
 /* ============================= Participants (delegations / tickets) ============================= */
 let ParticipantDraft = null;
+/* يرجع كائنًا فيه بيانات الرحلة اللازمة (تواريخ/نقل/سكن/اتحاد) سواء كانت رحلة محفوظة
+   فعليًا (mode='existing') أو مسودة رحلة لسه ما انحفظت (mode='draft') */
+function participantSourceTrip(){
+  return ParticipantDraft.mode==='draft' ? TripDraft : DB.trips.find(x=>x.trip_id===ParticipantDraft.trip_id);
+}
+function sourceDaysCount(t){
+  if(!t || !t.start_date || !t.end_date) return null;
+  return Math.max(1, Math.round((new Date(t.end_date)-new Date(t.start_date))/86400000)+1);
+}
 Modals.addParticipant = function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
-  const u = Session.user;
   const fedUsers = DB.users.filter(x=>x.federation_id===t.federation_number && x.user_status==='مفتوح');
   ParticipantDraft = {
-    trip_id: tripId, user_type_filter:'', user_id: fedUsers[0]?fedUsers[0].user_id:'',
+    mode:'existing', trip_id: tripId, user_type_filter:'', user_id: fedUsers[0]?fedUsers[0].user_id:'',
     is_linked_to_trip: true, start_date: t.start_date, end_date: t.end_date,
     is_transportation_available: !!t.is_transportation_available, is_accommodation_available: !!t.is_accommodation_available,
     ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:''
@@ -796,14 +835,22 @@ Modals.addParticipant = function(tripId){
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.saveParticipant()">حفظ</button>`));
 };
-function participantDaysCount(){
-  const d = ParticipantDraft;
-  if(!d.start_date || !d.end_date) return null;
-  return Math.max(1, Math.round((new Date(d.end_date)-new Date(d.start_date))/86400000)+1);
-}
+Modals.addParticipantDraft = function(){
+  const u = Session.user;
+  const fedUsers = DB.users.filter(x=>x.federation_id===u.federation_id && x.user_status==='مفتوح');
+  ParticipantDraft = {
+    mode:'draft', trip_id:null, user_type_filter:'', user_id: fedUsers[0]?fedUsers[0].user_id:'',
+    is_linked_to_trip: true, start_date: TripDraft.start_date, end_date: TripDraft.end_date,
+    is_transportation_available: !!TripDraft.is_transportation_available, is_accommodation_available: !!TripDraft.is_accommodation_available,
+    ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:''
+  };
+  openModalHTML(modalShell('addParticipantModal','إضافة مشارك للانتداب', Modals.renderAddParticipantBody(), true,
+    `<button class="btn btn-outline" onclick="Modals.reopenAddTripModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveParticipant()">إضافة للقائمة</button>`));
+};
 Modals.renderAddParticipantBody = function(){
   const d = ParticipantDraft;
-  const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+  const t = participantSourceTrip();
   const fedUsers = DB.users.filter(x=>x.federation_id===t.federation_number && x.user_status==='مفتوح');
   const typesPresent = Array.from(new Set(fedUsers.map(x=>x.user_type))).sort();
   const typeFilterOpts = `<option value="">— كل الأنواع —</option>` + typesPresent.map(ty=>`<option value="${esc(ty)}" ${d.user_type_filter===ty?'selected':''}>${esc(ty)}</option>`).join('');
@@ -812,7 +859,7 @@ Modals.renderAddParticipantBody = function(){
   const selectedUser = userById(d.user_id);
   const resolvedType = selectedUser ? selectedUser.user_type : '—';
   const ticketOpts = TICKET_TYPES.map(x=>`<option value="${esc(x)}" ${d.ticket_type===x?'selected':''}>${esc(x)}</option>`).join('');
-  const days = d.is_linked_to_trip ? t.trip_days_count : participantDaysCount();
+  const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
   const total = Number(d.ticket_price||0) + Number(d.amount_delegations||0);
 
   const matchBlock = d.is_linked_to_trip ? `
@@ -853,7 +900,7 @@ Modals.renderAddParticipantBody = function(){
 };
 Modals.updateParticipantTypeFilter = function(val){
   ParticipantDraft.user_type_filter = val;
-  const t = DB.trips.find(x=>x.trip_id===ParticipantDraft.trip_id);
+  const t = participantSourceTrip();
   const fedUsers = DB.users.filter(x=>x.federation_id===t.federation_number && x.user_status==='مفتوح');
   const filtered = val ? fedUsers.filter(x=>x.user_type===val) : fedUsers;
   ParticipantDraft.user_id = filtered[0] ? filtered[0].user_id : '';
@@ -862,9 +909,6 @@ Modals.updateParticipantTypeFilter = function(val){
 };
 Modals.updateParticipantField = function(key,val){
   ParticipantDraft[key] = val;
-  if(key==='user_id'){
-    // إعادة ضبط النوع التلقائي والتاريخ الافتراضي تُعاد بإعادة الرسم الكامل
-  }
   const body = document.getElementById('addParticipantModalBody');
   if(body) body.innerHTML = Modals.renderAddParticipantBody();
 };
@@ -876,16 +920,19 @@ Modals.updateParticipantAmount = function(key,val){
 };
 Actions.saveParticipant = async function(){
   const d = ParticipantDraft;
-  const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+  const t = participantSourceTrip();
   const u = Session.user;
-  if(!Perm.canManageParticipants(u,t)){ toast('لا تملك صلاحية إضافة مشارك','danger'); return; }
   if(!d.user_id){ toast('اختر مشاركًا','danger'); return; }
+  if(d.mode==='existing'){
+    const tripRecord = DB.trips.find(x=>x.trip_id===d.trip_id);
+    if(!Perm.canManageParticipants(u,tripRecord)){ toast('لا تملك صلاحية إضافة مشارك','danger'); return; }
+  }
   const target = userById(d.user_id);
   const ticketPrice = Number(d.ticket_price||0);
   const amount = Number(d.amount_delegations||0);
   const startDate = d.is_linked_to_trip ? t.start_date : (d.start_date||null);
   const endDate = d.is_linked_to_trip ? t.end_date : (d.end_date||null);
-  const days = d.is_linked_to_trip ? t.trip_days_count : participantDaysCount();
+  const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
   const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
   const accom = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
   let filePath = null;
@@ -895,9 +942,8 @@ Actions.saveParticipant = async function(){
     if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
     filePath = up.data.path;
   }
-  const saved = await dbInsert('delegations', {
-    delegation_id: uid('dlg'), trip_id: d.trip_id, federation_number: t.federation_number,
-    delegations_status:'غير معتمد', user_type: target?target.user_type:null, user_id:d.user_id,
+  const record = {
+    delegation_id: uid('dlg'), delegations_status:'غير معتمد', user_type: target?target.user_type:null, user_id:d.user_id,
     amount_delegations: amount, is_linked_to_trip: !!d.is_linked_to_trip, justification: d.justification,
     delegation_days_count: days, start_date:startDate, end_date:endDate,
     is_transportation_available: transport, is_accommodation_available: accom,
@@ -905,7 +951,14 @@ Actions.saveParticipant = async function(){
     ticket_type: d.ticket_type, is_car_traveler: !!d.is_car_traveler,
     ticket_price: ticketPrice, total_amount: ticketPrice+amount, file: filePath,
     created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
-  });
+  };
+  if(d.mode==='draft'){
+    TripDraft.participants.push(record);
+    Modals.reopenAddTripModal();
+    toast('تمت إضافة المشارك للقائمة — سيُحفظ مع الرحلة','success');
+    return;
+  }
+  const saved = await dbInsert('delegations', Object.assign({trip_id:d.trip_id, federation_number:t.federation_number}, record));
   if(!saved) return;
   closeModal(); toast('تمت إضافة المشارك — بانتظار الاعتماد','success'); App.go('tripDetail',{id:d.trip_id});
 };
