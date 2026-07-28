@@ -7,353 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&family=Tajawal:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<style>
-:root{
-  --bg:#E8F0EA;
-  --paper:#F2F7F3;
-  --panel:#FFFFFF;
-  --ink:#14261B;
-  --ink-2:#1F3D2B;
-  --muted:#5C6E62;
-  --line:#D6E3DA;
-  --line-soft:#E7F0EA;
-  --teal:#3FA579;
-  --teal-dark:#2A7A57;
-  --teal-soft:#DFF1E7;
-  --gold:#C79A4E;
-  --gold-soft:#F5EAD3;
-  --danger:#B23A2E;
-  --danger-soft:#F7E3E0;
-  --warning:#B8720F;
-  --warning-soft:#FBEDD9;
-  --success:#2E8562;
-  --success-soft:#DEF0E6;
-  --info:#8B5FA6;
-  --info-soft:#EFE6F3;
-  --radius:12px;
-  --shadow:0 1px 2px rgba(20,38,27,.05), 0 8px 24px -12px rgba(20,38,27,.20);
-}
-*{box-sizing:border-box;}
-html,body{margin:0;padding:0;}
-body{
-  background:var(--bg);
-  color:var(--ink);
-  font-family:'Tajawal',sans-serif;
-  font-size:14.5px;
-  line-height:1.6;
-  min-height:100vh;
-}
-h1,h2,h3,h4,.display{font-family:'Almarai',sans-serif;}
-button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit;}
-a{color:inherit;}
-::selection{background:var(--gold-soft);}
-
-/* ---------- Ledger paper background texture ---------- */
-.paper-bg{
-  background-image:
-    linear-gradient(var(--line-soft) 1px, transparent 1px);
-  background-size: 100% 42px;
-  background-position: 0 96px;
-}
-
-/* ---------- Utility ---------- */
-.hidden{display:none !important;}
-.container{max-width:1180px;margin:0 auto;padding:0 22px;}
-.muted{color:var(--muted);}
-.flex{display:flex;}
-.between{justify-content:space-between;}
-.center{align-items:center;}
-.gap-8{gap:8px;} .gap-12{gap:12px;} .gap-16{gap:16px;} .gap-24{gap:24px;}
-.wrap{flex-wrap:wrap;}
-.grow{flex:1;}
-.mt-8{margin-top:8px;} .mt-12{margin-top:12px;} .mt-16{margin-top:16px;} .mt-24{margin-top:24px;} .mt-32{margin-top:32px;}
-.mb-8{margin-bottom:8px;} .mb-12{margin-bottom:12px;} .mb-16{margin-bottom:16px;}
-.text-left{text-align:left;} .text-center{text-align:center;}
-.small{font-size:12.5px;}
-.tabular{font-variant-numeric:tabular-nums;}
-.num{font-family:'Tajawal',sans-serif;font-weight:700;font-variant-numeric:tabular-nums;}
-
-/* ---------- Buttons ---------- */
-.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  border:1px solid transparent;border-radius:9px;
-  padding:9px 16px;font-weight:700;font-size:13.5px;cursor:pointer;
-  transition:transform .05s ease, box-shadow .15s ease, background .15s ease;
-  white-space:nowrap;
-}
-.btn:active{transform:translateY(1px);}
-.btn-primary{background:var(--teal);color:#fff;}
-.btn-primary:hover{background:var(--teal-dark);}
-.btn-gold{background:var(--gold);color:#fff;}
-.btn-gold:hover{background:#a67f3f;}
-.btn-outline{background:transparent;color:var(--ink-2);border-color:var(--line);}
-.btn-outline:hover{border-color:var(--teal);color:var(--teal);}
-.btn-danger{background:transparent;color:var(--danger);border-color:var(--danger-soft);}
-.btn-danger:hover{background:var(--danger-soft);}
-.btn-ghost{background:transparent;color:var(--muted);border:none;padding:6px 8px;}
-.btn-ghost:hover{color:var(--ink);}
-.btn-sm{padding:6px 11px;font-size:12.5px;border-radius:7px;}
-.btn-block{width:100%;}
-.btn:disabled{opacity:.45;cursor:not-allowed;}
-
-/* ---------- Cards / Panels ---------- */
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
-.card-pad{padding:20px 22px;}
-
-/* ---------- Badges (status pills) ---------- */
-.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:100px;font-size:12px;font-weight:700;line-height:1;white-space:nowrap;}
-.badge::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;}
-.badge-success{background:var(--success-soft);color:var(--success);}
-.badge-warning{background:var(--warning-soft);color:var(--warning);}
-.badge-danger{background:var(--danger-soft);color:var(--danger);}
-.badge-info{background:var(--info-soft);color:var(--info);}
-.badge-muted{background:#EAEDEC;color:var(--muted);}
-.badge-gold{background:var(--gold-soft);color:var(--gold);}
-
-/* =====================================================
-   SCREEN: file picker / login (centered stage)
-   ===================================================== */
-.stage{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-.stage-card{width:100%;max-width:430px;}
-.brandmark{
-  width:56px;height:56px;border-radius:14px;
-  background:linear-gradient(155deg, var(--teal) 0%, var(--teal-dark) 100%);
-  display:flex;align-items:center;justify-content:center;
-  color:#fff;font-family:'Almarai',sans-serif;font-weight:800;font-size:22px;
-  box-shadow:0 8px 20px -8px rgba(11,110,92,.55);
-  margin-bottom:18px;
-}
-.stage-title{font-size:22px;font-weight:800;margin:0 0 4px;}
-.stage-sub{color:var(--muted);margin:0 0 26px;font-size:13.5px;}
-.field{margin-bottom:16px;}
-.field label{display:block;font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:6px;}
-.field input,.field select,.field textarea{
-  width:100%;border:1.5px solid var(--line);border-radius:9px;
-  padding:10px 12px;background:var(--paper);outline:none;
-  transition:border-color .15s;
-}
-.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--teal);background:#fff;}
-.field input[type="file"]{padding:8px;background:var(--paper);border:1.5px dashed var(--line);cursor:pointer;}
-.field input[type="file"]::file-selector-button{background:var(--teal);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;font-size:12px;margin-left:8px;cursor:pointer;}
-.field input[type="file"]::file-selector-button:hover{background:var(--teal-dark);}
-.field .hint{font-size:11.5px;color:var(--muted);margin-top:5px;}
-.upload-drop{
-  border:2px dashed var(--line);border-radius:14px;padding:34px 20px;text-align:center;
-  cursor:pointer;transition:border-color .15s, background .15s;background:var(--paper);
-}
-.upload-drop:hover{border-color:var(--teal);background:var(--teal-soft);}
-.upload-drop .icon{font-size:30px;margin-bottom:8px;}
-.alert{border-radius:9px;padding:10px 14px;font-size:13px;margin-top:14px;border:1px solid transparent;}
-.alert-danger{background:var(--danger-soft);color:var(--danger);border-color:#f0cac5;}
-.alert-info{background:var(--info-soft);color:var(--info);border-color:#ddc9e6;}
-.alert-success{background:var(--success-soft);color:var(--success);border-color:#c7e8d5;}
-.alert-warning{background:var(--warning-soft);color:var(--warning);border-color:#f0dcb0;}
-.demo-box{background:var(--paper);border:1px dashed var(--line);border-radius:10px;padding:12px 14px;margin-top:16px;font-size:12px;}
-.demo-box .row{display:flex;justify-content:space-between;padding:3px 0;}
-.demo-box b{font-family:'Tajawal',sans-serif;}
-
-/* =====================================================
-   APP SHELL
-   ===================================================== */
-#app-shell{display:flex;min-height:100vh;}
-.sidebar{
-  width:230px;flex-shrink:0;background:var(--ink);color:#c9d6cc;
-  display:flex;flex-direction:column;padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto;
-}
-.sb-brand{display:flex;align-items:center;gap:10px;padding:0 6px 20px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:16px;}
-.sb-brand .mark{width:34px;height:34px;border-radius:9px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:'Almarai';font-weight:800;color:#1c1404;flex-shrink:0;}
-.sb-brand .fed{font-size:12.5px;font-weight:700;color:#fff;line-height:1.3;}
-.sb-brand .fed small{display:block;color:#8fa899;font-weight:400;font-size:10.5px;}
-.sb-nav{display:flex;flex-direction:column;gap:2px;flex:1;}
-.sb-item{
-  display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;
-  color:#aebfb0;text-decoration:none;font-size:13px;font-weight:700;cursor:pointer;border:none;background:transparent;width:100%;text-align:right;
-}
-.sb-item .ico{width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;opacity:.9;}
-.sb-item .ico svg{width:17px;height:17px;}
-.sb-item:hover{background:rgba(255,255,255,.06);color:#fff;}
-.sb-item.active{background:var(--teal);color:#fff;}
-.sb-foot{border-top:1px solid rgba(255,255,255,.08);padding-top:12px;margin-top:12px;}
-.sb-user{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;cursor:pointer;}
-.sb-user:hover{background:rgba(255,255,255,.06);}
-.sb-user .av{width:32px;height:32px;border-radius:50%;background:var(--teal-soft);color:var(--teal-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;}
-.sb-user .who{font-size:12.5px;color:#fff;font-weight:700;line-height:1.3;}
-.sb-user .who small{display:block;color:#8fa899;font-weight:400;}
-.sb-logout{display:block;width:100%;text-align:center;margin-top:10px;font-size:11.5px;color:#82977f;background:none;border:1px solid rgba(255,255,255,.12);border-radius:7px;padding:7px;cursor:pointer;}
-.sb-logout:hover{color:#fff;border-color:rgba(255,255,255,.3);}
-
-.main{flex:1;min-width:0;display:flex;flex-direction:column;}
-.topbar{
-  background:var(--panel);border-bottom:1px solid var(--line);
-  padding:14px 26px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:20;
-}
-.topbar h1{font-size:18px;margin:0;}
-.topbar .crumb{font-size:12px;color:var(--muted);margin-top:2px;}
-#view{padding:24px 26px 60px;flex:1;}
-
-/* ---------- Stat cards ---------- */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;}
-.stat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow);position:relative;overflow:hidden;}
-.stat-card .lbl{font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px;}
-.stat-card .val{font-family:'Almarai',sans-serif;font-size:23px;font-weight:800;color:var(--ink);}
-.stat-card .sub{font-size:11px;color:var(--muted);margin-top:4px;}
-.stat-card.accent-teal{border-top:3px solid var(--teal);}
-.stat-card.accent-gold{border-top:3px solid var(--gold);}
-.stat-card.accent-warn{border-top:3px solid var(--warning);}
-.stat-card.accent-danger{border-top:3px solid var(--danger);}
-
-/* ---------- Custody cards ---------- */
-.custody-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px;}
-.cus-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;position:relative;cursor:pointer;transition:border-color .15s, transform .1s;overflow:hidden;}
-.cus-card:hover{border-color:var(--teal);transform:translateY(-2px);}
-.cus-card .top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
-.cus-card .desc{font-weight:800;font-size:14.5px;color:var(--ink);margin:0 0 3px;font-family:'Almarai';}
-.cus-card .who{font-size:12px;color:var(--muted);}
-.cus-card .ring-wrap{display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);}
-.cus-card .figs{flex:1;}
-.cus-card .figs .row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;}
-.cus-card .figs .row b{font-weight:700;}
-.overdue-flag{color:var(--danger);font-size:11px;font-weight:700;margin-top:6px;display:flex;align-items:center;gap:4px;}
-.stamp{
-  position:absolute;left:14px;bottom:14px;width:64px;height:64px;border-radius:50%;
-  border:2.5px solid var(--danger);color:var(--danger);display:flex;align-items:center;justify-content:center;
-  text-align:center;font-family:'Almarai';font-weight:800;font-size:10px;transform:rotate(-14deg);opacity:.8;
-  line-height:1.15;
-}
-.stamp::before{content:'';position:absolute;inset:4px;border:1px solid var(--danger);border-radius:50%;}
-
-/* ---------- Tables ---------- */
-.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);}
-table.tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:560px;}
-table.tbl th{background:var(--paper);color:var(--ink-2);font-weight:700;text-align:right;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:12px;}
-table.tbl td{padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle;}
-table.tbl tr:last-child td{border-bottom:none;}
-table.tbl tbody tr:hover{background:var(--paper);}
-.empty-row{padding:36px 20px;text-align:center;color:var(--muted);}
-.empty-row .ico{font-size:26px;margin-bottom:8px;}
-
-/* ---------- Home page: two-column layout, activity feed ---------- */
-.grid-2col{display:grid;grid-template-columns:1.05fr 1fr;gap:22px;align-items:start;}
-.block-title{font-size:14px;margin:0 0 10px;font-weight:800;}
-.activity-row{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line-soft);cursor:pointer;font-size:12.5px;}
-.activity-row:last-child{border-bottom:none;}
-.activity-row:hover{background:var(--paper);}
-.activity-row .ai{font-size:15px;flex-shrink:0;}
-.activity-row .at{color:var(--ink);}
-.activity-row .atime{color:var(--muted);font-size:11px;white-space:nowrap;flex-shrink:0;}
-.clickable-row{cursor:pointer;}
-@media(max-width:960px){ .grid-2col{grid-template-columns:1fr;} }
-
-/* ---------- Cost center enum picker (add custody) ---------- */
-.cc-combo{border:1.5px solid var(--line);border-radius:10px;padding:10px;background:var(--paper);}
-.cc-tags{display:flex;flex-wrap:wrap;gap:6px;}
-.cc-tag{display:inline-flex;align-items:center;gap:6px;background:var(--teal);color:#fff;border-radius:100px;padding:5px 6px 5px 12px;font-size:12px;font-weight:700;}
-.cc-tag button{background:rgba(255,255,255,.25);border:none;color:#fff;width:16px;height:16px;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;}
-.cc-tag button:hover{background:rgba(255,255,255,.45);}
-.search-box.full-width{width:100%;}
-.search-box.full-width input{width:100%;}
-.cc-pick-list{border:1.5px solid var(--line);border-radius:10px;max-height:200px;overflow-y:auto;background:var(--panel);}
-.cc-pick-row{display:flex;align-items:center;gap:9px;padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line-soft);}
-.cc-pick-row:last-child{border-bottom:none;}
-.cc-pick-row:hover{background:var(--teal-soft);}
-.cc-pick-row input{width:16px;height:16px;accent-color:var(--teal);flex-shrink:0;}
-.cc-pick-main{font-weight:800;background:var(--paper);}
-.cc-pick-header{cursor:default;}
-.cc-pick-header:hover{background:var(--paper);}
-.cc-pick-empty{cursor:default;color:var(--muted);font-size:12px;}
-.cc-pick-empty:hover{background:var(--panel);}
-.cc-pick-sub{padding-right:34px;color:var(--ink-2);}
-
-/* ---------- Federation group tree (auditor views) ---------- */
-.fed-group{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:14px;overflow:hidden;}
-.fed-group-head{display:flex;align-items:center;gap:10px;padding:13px 18px;background:var(--paper);cursor:pointer;user-select:none;font-weight:800;font-size:14px;}
-.fed-group-head:hover{background:var(--teal-soft);}
-.fed-group-head .fed-name{flex:1;}
-.fed-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.fed-summary .stat-chip{background:var(--panel);border:1px solid var(--line);border-radius:100px;padding:4px 11px;color:var(--ink-2);font-size:11.5px;font-weight:700;white-space:nowrap;}
-.fed-summary .stat-chip b{color:var(--ink);font-variant-numeric:tabular-nums;}
-.fed-group-head.fed-open .cc-caret{transform:rotate(90deg);}
-.fed-group-body{display:none;}
-.fed-group-body.fed-open{display:block;}
-.fed-group-body .tbl-wrap{border:none;border-radius:0;border-top:1px solid var(--line);}
-
-/* ---------- Cost center tree ---------- */
-.cc-forest{display:flex;flex-direction:column;gap:10px;}
-.cc-tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
-.cc-node{display:flex;align-items:center;gap:10px;padding:12px 16px;}
-.cc-main{background:var(--paper);font-size:13.5px;cursor:pointer;user-select:none;}
-.cc-main:hover{background:var(--teal-soft);}
-.cc-main .cc-ico{font-size:15px;}
-.cc-caret{display:inline-block;font-size:11px;color:var(--muted);transition:transform .15s;width:10px;}
-.cc-main.cc-open .cc-caret{transform:rotate(90deg);}
-.cc-node .cc-name{flex:1;}
-.cc-node .cc-spent{font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink-2);}
-.cc-children{padding:4px 0 8px;border-right:1.5px solid var(--line);margin-right:26px;display:none;}
-.cc-children.cc-open{display:block;}
-.cc-sub{position:relative;padding-right:22px;font-size:12.5px;margin-right:-1.5px;}
-.cc-sub .cc-connector{position:absolute;right:0;top:0;width:16px;height:19px;border-bottom:1.5px solid var(--line);}
-.cc-empty{color:var(--muted);}
-
-/* ---------- Section header ---------- */
-.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap;}
-.section-head h2{font-size:17px;margin:0;}
-.eyebrow{font-size:11px;font-weight:800;letter-spacing:.06em;color:var(--gold);text-transform:uppercase;margin-bottom:4px;}
-
-/* ---------- Tabs / filters ---------- */
-.pill-tabs{display:flex;gap:6px;flex-wrap:wrap;}
-.pill-tab{padding:7px 14px;border-radius:100px;border:1px solid var(--line);background:var(--panel);font-size:12.5px;font-weight:700;color:var(--muted);cursor:pointer;}
-.pill-tab.active{background:var(--ink);color:#fff;border-color:var(--ink);}
-.search-box{position:relative;}
-.search-box input{padding-right:32px;min-width:220px;}
-.search-box .ico{position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:13px;}
-
-/* ---------- Modal ---------- */
-.modal-overlay{position:fixed;inset:0;background:rgba(14,34,51,.5);display:flex;align-items:flex-start;justify-content:center;padding:36px 16px;z-index:100;overflow-y:auto;}
-.modal{background:#fff;border-radius:16px;width:100%;max-width:640px;box-shadow:0 30px 60px -20px rgba(0,0,0,.35);animation:modalIn .18s ease;}
-@keyframes modalIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
-.modal.modal-wide{max-width:820px;}
-.modal-head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;}
-.modal-head h3{margin:0;font-size:16px;}
-.modal-body{padding:20px 22px;max-height:70vh;overflow-y:auto;}
-.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;background:var(--paper);border-radius:0 0 16px 16px;}
-.modal-close{background:none;border:none;font-size:18px;color:var(--muted);cursor:pointer;line-height:1;padding:4px;}
-.modal-close:hover{color:var(--ink);}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;}
-.form-grid .full{grid-column:1/-1;}
-.chip-select{display:flex;flex-wrap:wrap;gap:8px;}
-.chip{border:1.5px solid var(--line);border-radius:100px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer;color:var(--ink-2);background:var(--paper);user-select:none;}
-.chip.on{background:var(--teal);border-color:var(--teal);color:#fff;}
-.divider{border:none;border-top:1px solid var(--line);margin:18px 0;}
-.subhead{font-size:13px;font-weight:800;color:var(--ink-2);display:flex;align-items:center;gap:8px;margin-bottom:10px;}
-.subhead .n{background:var(--gold);color:#fff;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;}
-.line-item{display:grid;grid-template-columns:1.3fr 1.1fr .8fr 34px;gap:8px;align-items:center;margin-bottom:8px;}
-.line-item select,.line-item input{padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;background:var(--paper);width:100%;}
-.rm-line{background:var(--danger-soft);color:var(--danger);border:none;border-radius:7px;width:34px;height:34px;cursor:pointer;font-weight:800;}
-.lines-empty{padding:16px;text-align:center;color:var(--muted);font-size:12.5px;border:1.5px dashed var(--line);border-radius:9px;}
-
-/* ---------- Detail page ---------- */
-.detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;}
-.detail-title{font-size:20px;font-weight:800;margin:0 0 6px;font-family:'Almarai';}
-.kv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-top:16px;}
-.kv-grid .kv-lbl{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:3px;}
-.kv-grid .kv-val{font-size:13.5px;font-weight:700;}
-.ring-svg{flex-shrink:0;}
-.balance-strip{display:flex;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:16px;}
-.balance-cell{flex:1;padding:14px 16px;text-align:center;border-left:1px solid var(--line);}
-.balance-cell:first-child{border-right:none;}
-.balance-cell:last-child{border-left:none;}
-.balance-cell .lbl{font-size:11px;color:var(--muted);font-weight:700;}
-.balance-cell .val{font-size:17px;font-weight:800;margin-top:4px;font-family:'Almarai';}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 22px;border-radius:10px;font-size:13px;font-weight:700;z-index:300;box-shadow:0 10px 30px rgba(0,0,0,.25);}
-
-@media(max-width:880px){
-  .sidebar{position:fixed;right:-230px;z-index:200;transition:right .2s;box-shadow:0 0 0 2000px rgba(0,0,0,0);}
-  .sidebar.open{right:0;box-shadow:0 0 0 2000px rgba(0,0,0,.4);}
-  #app-shell{display:block;}
-  .form-grid{grid-template-columns:1fr;}
-  .line-item{grid-template-columns:1fr;}
-}
-</style>
+<script src="auth.js"></script>
+<link rel="stylesheet" href="shared.css">
 </head>
 <body>
 
@@ -367,28 +22,6 @@ table.tbl tbody tr:hover{background:var(--paper);}
       <div id="bootStatus"><div class="alert alert-info">جارٍ تحميل النظام…</div></div>
     </div>
     <p class="small muted mt-16 text-center">البيانات محفوظة على قاعدة بيانات Supabase الخاصة بمنظمتك.</p>
-  </div>
-</div>
-
-<!-- ============ SCREEN 2: LOGIN ============ -->
-<div id="screen-login" class="stage hidden">
-  <div class="stage-card">
-    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
-    <h1 class="stage-title">تسجيل الدخول</h1>
-    <p class="stage-sub">أدخل بيانات حسابك للمتابعة.</p>
-    <div class="card card-pad">
-      <div class="field">
-        <label>اسم المستخدم</label>
-        <input type="text" id="loginUser" placeholder="اسم المستخدم" autocomplete="username">
-      </div>
-      <div class="field">
-        <label>كلمة المرور</label>
-        <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
-      </div>
-      <button class="btn btn-primary btn-block" id="loginBtn" onclick="App.login()">تسجيل الدخول</button>
-      <div id="loginAlert"></div>
-    </div>
-    <div id="demoCreds"></div>
   </div>
 </div>
 
@@ -444,7 +77,9 @@ const SCHEMA = {
 };
 const PK = {federations:'federation_id',users:'user_id',custodies:'custody_id',custody_closures:'closure_id',custody_transfers:'transfer_id',custody_budgets:'budget_id',expense_types:'account_number',cost_centers:'cost_center_id'};
 
-const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف'];
+const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','لاعب','حكم','متعاون'];
+// أنواع لا يُسمح لها بتسجيل الدخول إلى أي نظام إطلاقًا (سجلات فقط داخل النظام)
+const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const USER_STATUSES = ['مفتوح','مغلق','تحت المعالجة','مسودة'];
 const CUSTODY_TYPES = ['عهدة نقدية دائمة','عهدة نقدية مؤقتة'];
 const CURRENCIES = ['SAR','USD','EUR','AED','GBP'];
@@ -498,8 +133,14 @@ const Perm = {
   isExec: u => u && u.user_type === 'مدير تنفيذي',
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
+  isHR: u => u && u.user_type === 'موارد بشرية',
+  isPlayer: u => u && u.user_type === 'لاعب',
+  isReferee: u => u && u.user_type === 'حكم',
+  isCollaborator: u => u && u.user_type === 'متعاون',
+  // الموارد البشرية لها نفس صلاحيات الموظف تمامًا
+  isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
-  canManageUsers: u => !Perm.isEmployee(u),
+  canManageUsers: u => !Perm.isBasicStaff(u),
   canChangeUserStatus: u => Perm.isTopApprover(u),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
   canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
@@ -518,7 +159,7 @@ const Perm = {
 function visibleCustodies(u){
   if(!u) return [];
   if(Perm.isAuditor(u)) return DB.custodies.slice();
-  if(Perm.isEmployee(u)) return DB.custodies.filter(c=>c.federation_id===u.federation_id && c.received_by_user_id===u.user_id);
+  if(Perm.isBasicStaff(u)) return DB.custodies.filter(c=>c.federation_id===u.federation_id && c.received_by_user_id===u.user_id);
   return DB.custodies.filter(c=>c.federation_id===u.federation_id);
 }
 function visibleUsers(u){
@@ -794,9 +435,23 @@ function exportWorkbook(){
   XLSX.writeFile(wb, 'custody-backup-' + stamp + '.xlsx');
 }
 
-/* ---------------------------- App bootstrap ---------------------------- */
+/* ---------------------------- App bootstrap ----------------------------
+   تسجيل الدخول أصبح في صفحة منفصلة (login.html). هذه الصفحة (نظام العهد)
+   تفترض وجود جلسة محفوظة مسبقًا (Auth.readSession)، وإن لم توجد تُعيد
+   التوجيه فورًا إلى شاشة اختيار النظام/الدخول. */
 async function bootApp(){
   const statusEl = document.getElementById('bootStatus');
+  const sessionUser = Auth.readSession();
+  if(!sessionUser){
+    Auth.goToLogin();
+    return;
+  }
+  // حاجز أمان إضافي على العميل: أنواع مستخدمين معيّنة لا تدخل أي نظام إطلاقًا
+  if(NO_LOGIN_USER_TYPES.includes(sessionUser.user_type)){
+    Auth.clearSession();
+    Auth.goToLogin();
+    return;
+  }
   try{
     statusEl.innerHTML = `<div class="alert alert-info">جارٍ الاتصال بالخادم…</div>`;
     DB = await loadAllData();
@@ -805,7 +460,20 @@ async function bootApp(){
       return;
     }
     await seedDefaultCostCenters();
-    App.showLogin(DB.users.length===0);
+    // تأكيد أن المستخدم المخزَّن بالجلسة لا يزال موجودًا ومفعّلًا في قاعدة البيانات
+    const freshUser = (DB.users || []).find(x => x.user_id === sessionUser.user_id);
+    if(!freshUser || freshUser.user_status !== 'مفتوح'){
+      Auth.clearSession();
+      Auth.goToLogin();
+      return;
+    }
+    Session.user = freshUser;
+    Session.view = 'dashboard';
+    Session.params = {};
+    document.getElementById('screen-boot').classList.add('hidden');
+    document.getElementById('app-shell').classList.remove('hidden');
+    App.renderShell();
+    App.go('dashboard');
   }catch(err){
     console.error(err);
     statusEl.innerHTML = `<div class="alert alert-danger">تعذّر الاتصال بالخادم.<br><span class="small">${esc(err.message||'')}</span><br><br>تأكد من أن الخادم يعمل، ومن ضبط SUPABASE_URL و SUPABASE_SERVICE_KEY في متغيرات البيئة على Render.</div>`;
@@ -814,61 +482,10 @@ async function bootApp(){
 /* ============================= App object ============================= */
 const App = {};
 
-App.showLogin = function(noUsers){
-  document.getElementById('screen-boot').classList.add('hidden');
-  document.getElementById('screen-login').classList.remove('hidden');
-  document.getElementById('loginAlert').innerHTML = '';
-  const demoBox = document.getElementById('demoCreds');
-  if(noUsers){
-    demoBox.innerHTML = `<div class="demo-box">
-      <div style="font-weight:800;margin-bottom:6px;">⚠️ لا يوجد مستخدمون في قاعدة البيانات بعد.</div>
-      <div class="small muted">أضف أول مستخدم (رئيس اتحاد) مباشرة من Supabase عبر SQL Editor أو Table Editor → جدول users. راجع تعليمات README لأمر SQL جاهز.</div>
-    </div>`;
-  } else {
-    demoBox.innerHTML = '';
-  }
-};
-
-App.login = async function(){
-  const username = document.getElementById('loginUser').value.trim();
-  const password = document.getElementById('loginPass').value;
-  const alertEl = document.getElementById('loginAlert');
-  const btn = document.getElementById('loginBtn');
-  alertEl.innerHTML = '';
-  if(!username || !password){
-    alertEl.innerHTML = `<div class="alert alert-danger">الرجاء إدخال اسم المستخدم وكلمة المرور.</div>`;
-    return;
-  }
-  btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-  const { data, error } = await apiCall({ op:'rpc', fn:'login', args:{ p_username: username, p_password: password } });
-  btn.disabled = false; btn.textContent = 'تسجيل الدخول';
-  if(error){
-    alertEl.innerHTML = `<div class="alert alert-danger">تعذّر الاتصال بقاعدة البيانات: ${esc(error.message)}</div>`;
-    return;
-  }
-  const u = (data && data[0]) ? data[0] : null;
-  if(!u){
-    alertEl.innerHTML = `<div class="alert alert-danger">اسم المستخدم أو كلمة المرور غير صحيحة.</div>`;
-    return;
-  }
-  if(u.user_status !== 'مفتوح'){
-    const msgs = {'مغلق':'هذا الحساب مغلق.','تحت المعالجة':'حسابك بانتظار موافقة رئيس الاتحاد أو المدير التنفيذي.','مسودة':'حسابك لا يزال في وضع المسودة ولم يُفعّل بعد.'};
-    alertEl.innerHTML = `<div class="alert alert-warning">${esc(msgs[u.user_status] || 'الحساب غير مفعّل حاليًا.')}</div>`;
-    return;
-  }
-  Session.user = u;
-  Session.view = 'dashboard';
-  Session.params = {};
-  document.getElementById('screen-login').classList.add('hidden');
-  document.getElementById('app-shell').classList.remove('hidden');
-  App.renderShell();
-  App.go('dashboard');
-};
-
 App.logout = function(){
   Session.user = null;
-  document.getElementById('app-shell').classList.add('hidden');
-  App.showLogin(null);
+  Auth.clearSession();
+  Auth.goToLogin();
 };
 
 App.exportExcel = function(){
@@ -910,7 +527,7 @@ const NAV_ITEMS = [
   {key:'transferslist', label:'التحويلات', ico:ICONS.exchange, show: ()=>true},
   {key:'expenseslist', label:'المصاريف الفعلية', ico:ICONS.filecheck, show: ()=>true},
   {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
-  {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isEmployee(u)},
+  {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isBasicStaff(u)},
   {key:'expensetypes', label:'أنواع المصاريف', ico:ICONS.list, show: u=>true},
   {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)},
 ];
@@ -2911,8 +2528,6 @@ function renderUserCustodyPanel(userId){
 })();
 
 document.addEventListener('DOMContentLoaded', function(){
-  document.getElementById('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') App.login(); });
-  document.getElementById('loginUser').addEventListener('keydown', function(e){ if(e.key==='Enter') App.login(); });
   bootApp();
 });
 
