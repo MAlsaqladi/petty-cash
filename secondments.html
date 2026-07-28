@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>نظام إدارة الانتدابات وتذاكر السفر</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&family=Tajawal:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<script src="auth.js"></script>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+
+<div id="screen-boot" class="stage">
+  <div class="stage-card">
+    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
+    <h1 class="stage-title">نظام إدارة الانتدابات وتذاكر السفر</h1>
+    <p class="stage-sub">جارٍ التحقق من الجلسة…</p>
+  </div>
+</div>
+
+<div id="app-shell" class="hidden">
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <div class="mark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:9px;"></div>
+      <div class="fed" id="sbFedName">—<small>نظام الانتدابات وتذاكر السفر</small></div>
+    </div>
+    <nav class="sb-nav"></nav>
+    <div class="sb-foot">
+      <div class="sb-user">
+        <div class="av" id="sbAvatar">?</div>
+        <div class="who" id="sbWho">—<small>—</small></div>
+      </div>
+      <button class="sb-logout" onclick="doLogout()">تسجيل الخروج</button>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <h1>نظام إدارة الانتدابات وتذاكر السفر</h1>
+        <div class="crumb">قيد الإنشاء</div>
+      </div>
+    </div>
+    <div class="paper-bg">
+      <div class="card card-pad" style="max-width:640px;margin:40px auto;text-align:center;">
+        <div style="font-size:40px;margin-bottom:10px;">🚧</div>
+        <h2 style="margin:0 0 8px;">هذا النظام قيد الإعداد</h2>
+        <p class="muted">
+          تم تجهيز بوابة الدخول والربط بحسابك بنجاح. سيتم بناء شاشات طلبات الانتداب
+          وحجوزات تذاكر السفر هنا في الخطوة القادمة.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){
+  if(s===null||s===undefined) return '';
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
+
+function doLogout(){
+  Auth.clearSession();
+  Auth.goToLogin();
+}
+
+function boot(){
+  const u = Auth.readSession();
+  if(!u || NO_LOGIN_USER_TYPES.includes(u.user_type)){
+    Auth.clearSession();
+    Auth.goToLogin();
+    return;
+  }
+  document.getElementById('sbWho').innerHTML = esc(u.employee_name_ar || u.user_name) + '<small>' + esc(u.user_type) + '</small>';
+  document.getElementById('sbAvatar').textContent = (u.employee_name_ar || u.user_name || '?').trim().charAt(0);
+  document.getElementById('screen-boot').classList.add('hidden');
+  document.getElementById('app-shell').classList.remove('hidden');
+}
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
