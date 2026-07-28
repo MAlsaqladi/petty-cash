@@ -222,6 +222,95 @@ on conflict (id) do nothing;
 -- لا حاجة لأي سياسات إضافية على storage.objects لأن service_role يتجاوز RLS دائمًا.
 
 -- =====================================================================
+-- نظام إدارة الانتدابات وتذاكر السفر — نفس مبدأ نظام العهد تمامًا
+-- (خادم واحد، service_role واحد، RLS بلا سياسات anon = رفض كل وصول مباشر)
+-- =====================================================================
+
+create table if not exists trips (
+  trip_id                       text primary key,
+  federation_number             text references federations(federation_id),
+  trip_status                   text not null default 'طلب',
+  trip_name_ar                  text not null,
+  trip_name_en                  text,
+  trip_type                     text,
+  justifications                text,
+  desired_results                text,
+  achieved_results              text,
+  cost_centers_id                text,           -- قائمة معرّفات مراكز تكلفة مفصولة بفاصلة (نفس أسلوب custodies.cost_center_id)
+  start_date                     date,
+  end_date                       date,
+  trip_days_count                int,
+  entity                         text,           -- إلى أين: المملكة / أفريقيا والشرق الأوسط / آسيا / أوروبا
+  other_notes                    text,
+  has_sports_equipment           boolean default false,
+  is_transportation_available    boolean default false,
+  is_accommodation_available     boolean default false,
+  file                           text,
+  "Balance_trips"                numeric default 0,
+  created_by                     text,
+  created_at                     timestamptz default now(),
+  request_approved_by            text references users(user_id),
+  request_approval_date          timestamptz,
+  closure_approved_by            text references users(user_id),
+  closure_approval_date          timestamptz
+);
+
+create table if not exists delegations (
+  delegation_id                  text primary key,
+  trip_id                        text references trips(trip_id) on delete cascade,
+  federation_number              text references federations(federation_id),
+  delegations_status             text not null default 'غير معتمد',
+  user_type                      text,
+  user_id                        text references users(user_id),
+  amount_delegations             numeric default 0,
+  is_linked_to_trip              boolean default true,
+  justification                  text,
+  delegation_days_count          int,
+  start_date                     date,
+  end_date                       date,
+  is_transportation_available    boolean default false,
+  is_accommodation_available     boolean default false,
+  achieved_goal                  text,
+  hours_count                    numeric,
+  ticket_type                    text,
+  is_car_traveler                boolean default false,
+  ticket_price                   numeric default 0,
+  total_amount                   numeric default 0,
+  file                           text,
+  created_by                     text,
+  created_at                     timestamptz default now(),
+  request_approved_by            text references users(user_id),
+  request_approval_date          timestamptz
+);
+
+create table if not exists other_expenses (
+  expense_id                     text primary key,
+  trip_id                        text references trips(trip_id) on delete cascade,
+  federation_number              text references federations(federation_id),
+  expense_status                 text not null default 'غير معتمد',
+  expense_type                   text,
+  beneficiary                    text,
+  justification                  text,
+  amount                         numeric default 0,
+  file                           text,
+  created_by                     text,
+  created_at                     timestamptz default now(),
+  request_approved_by            text references users(user_id),
+  request_approval_date          timestamptz
+);
+
+create index if not exists idx_trips_fed on trips(federation_number);
+create index if not exists idx_delegations_trip on delegations(trip_id);
+create index if not exists idx_delegations_fed on delegations(federation_number);
+create index if not exists idx_other_expenses_trip on other_expenses(trip_id);
+create index if not exists idx_other_expenses_fed on other_expenses(federation_number);
+
+alter table trips enable row level security;
+alter table delegations enable row level security;
+alter table other_expenses enable row level security;
+-- لا سياسات anon هنا عن قصد — نفس مبدأ جداول العهد بالضبط (service_role فقط يصل).
+
+-- =====================================================================
 -- بيانات أولية اختيارية — عدّل الأسماء ثم شغّل الجزء التالي لإضافة أول اتحاد
 -- (يمكنك أيضًا تركه وسيقوم التطبيق نفسه بإرشادك لإنشاء أول حساب دخول تلقائيًا)
 -- =====================================================================
