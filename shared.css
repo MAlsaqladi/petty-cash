@@ -343,3 +343,58 @@ table.tbl tbody tr:hover{background:var(--paper);}
   .form-grid{grid-template-columns:1fr;}
   .line-item{grid-template-columns:1fr;}
 }
+
+/* =========================================================================
+   طباعة احترافية لتفاصيل العهدة (Actions.printCustody)
+   #printArea مخفي دائمًا على الشاشة، ويظهر فقط عند الطباعة.
+   بدل الاعتماد على visibility (يفشل مع العناصر position:fixed مثل القائمة
+   الجانبية ويترك مساحات فارغة/صفحات زائدة)، نُخفي كل أبناء body مباشرة
+   ما عدا #printArea، وهذا يمنع تسرّب أي جزء من واجهة التطبيق للطباعة.
+   ========================================================================= */
+#printArea{ display:none; }
+@media print{
+  @page{ size:A4; margin:14mm 12mm; }
+  html, body{ background:#fff !important; height:auto !important; overflow:visible !important; margin:0 !important; }
+  body > *{ display:none !important; }
+  body > #printArea{
+    display:block !important; position:static !important; width:100%;
+    font-family:'Tajawal','Almarai',sans-serif; color:#0F1F16; direction:rtl;
+  }
+}
+.print-doc{ padding:0; }
+.print-header{ border-bottom:2.5px solid #14261B; padding-bottom:10px; margin-bottom:16px; }
+.print-header-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.print-org{ display:flex; align-items:center; gap:10px; }
+.print-org img{ width:40px; height:40px; object-fit:contain; }
+.print-org-name{ font-weight:800; font-size:14px; }
+.print-sys-name{ font-size:11px; color:#5C6E62; font-weight:700; }
+.print-meta{ text-align:left; font-size:10.5px; color:#5C6E62; line-height:1.7; }
+.print-title{ font-size:19px; font-weight:800; margin:14px 0 2px; font-family:'Almarai',sans-serif; }
+.print-subtitle{ font-size:12px; color:#5C6E62; }
+.print-status-row{ display:flex; gap:10px; margin-top:8px; flex-wrap:wrap; }
+.print-status-chip{ border:1.3px solid #14261B; border-radius:999px; padding:3px 12px; font-size:11px; font-weight:800; }
+.print-kv{ width:100%; border-collapse:collapse; margin-top:14px; font-size:11.5px; }
+.print-kv td{ border:1px solid #C9D6CE; padding:7px 10px; vertical-align:top; }
+.print-kv td.lbl{ background:#F2F7F3; font-weight:800; width:15%; color:#1F3D2B; }
+.print-kv td.val{ width:35%; }
+.print-balance-strip{ display:flex; border:1.3px solid #14261B; border-radius:8px; overflow:hidden; margin-top:14px; }
+.print-balance-cell{ flex:1; text-align:center; padding:9px 6px; border-left:1px solid #C9D6CE; }
+.print-balance-cell:last-child{ border-left:none; }
+.print-balance-cell .lbl{ font-size:9.5px; color:#5C6E62; font-weight:700; }
+.print-balance-cell .val{ font-size:13px; font-weight:800; margin-top:2px; }
+.print-section-title{ font-size:13.5px; font-weight:800; margin:20px 0 6px; padding-bottom:4px; border-bottom:1.3px solid #14261B; }
+.print-tbl{ width:100%; border-collapse:collapse; font-size:11px; }
+.print-tbl th, .print-tbl td{ border:1px solid #C9D6CE; padding:6px 8px; text-align:right; }
+.print-tbl th{ background:#F2F7F3; font-weight:800; }
+.print-tbl tfoot td{ font-weight:800; background:#F8FBF9; }
+.print-empty{ font-size:11px; color:#5C6E62; padding:8px; text-align:center; border:1px dashed #C9D6CE; }
+.print-link{ color:#146C43; font-size:10.5px; text-decoration:underline; display:inline-block; }
+.print-link + .print-link{ margin-inline-start:8px; }
+.print-muted{ color:#8a9690; font-size:10.5px; }
+.print-signoff{ display:flex; gap:14px; margin-top:34px; page-break-inside:avoid; }
+.print-sign-box{ flex:1; text-align:center; }
+.print-sign-box .print-sign-lbl{ font-size:11.5px; font-weight:800; margin-bottom:26px; }
+.print-sign-box .print-sign-line{ border-top:1.3px solid #14261B; padding-top:6px; }
+.print-sign-box .print-sign-name{ font-size:11.5px; font-weight:700; }
+.print-sign-box .print-sign-date{ font-size:10px; color:#5C6E62; margin-top:2px; }
+.print-footer-note{ margin-top:22px; font-size:9.5px; color:#8a9690; text-align:center; }
