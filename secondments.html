@@ -259,7 +259,7 @@ const Perm = {
     if(pType==='مدير تنفيذي') return Perm.isPresident(u);
     return true;
   },
-  canManageOtherExpenses: (u,t) => t && t.trip_status!=='مغلقة' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
+  canManageOtherExpenses: (u,t) => t && t.trip_status!=='مغلقة' && t.trip_status!=='مرفوضة' && Perm.isAccountant(u) && u.federation_id===t.federation_number,
   canApproveOtherExpense: u => Perm.isTopApprover(u),
 };
 
@@ -780,7 +780,7 @@ function buildTripPrintHTML(tripId, fileUrlMap){
 
   const participantRows = f.participants.length ? f.participants.map(p=>`
     <tr>
-      <td>${esc(userLabel(p.user_id))}${!p.is_linked_to_trip?' ⚠':''}</td>
+      <td>${esc(userLabel(p.user_id))}${!p.is_linked_to_trip?' ⚠':''}${p.is_car_traveler?' 🚗':''}</td>
       <td>${esc(p.user_type||'—')}</td>
       <td>${esc(p.ticket_type||'—')}</td>
       <td>${money(p.ticket_price)}</td>
@@ -841,7 +841,7 @@ function buildTripPrintHTML(tripId, fileUrlMap){
       <div class="print-balance-cell"><div class="lbl">الإجمالي</div><div class="val">${money(f.totalApproved+f.totalPending)}</div></div>
     </div>
 
-    <div class="print-section-title">👥 المشاركون في الانتداب (⚠ = غير مطابق لتفاصيل الرحلة)</div>
+    <div class="print-section-title">👥 المشاركون في الانتداب (⚠ = غير مطابق لتفاصيل الرحلة، 🚗 = تعويض سفر بالسيارة)</div>
     <table class="print-tbl">
       <thead><tr><th>المشارك</th><th>النوع</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th>المرفق</th></tr></thead>
       <tbody>${participantRows}</tbody>
@@ -933,12 +933,15 @@ Views.tripDetail = function(tripId){
   const canAddParticipant = Perm.canManageParticipants(u,t);
   const participantRows = f.participants.length ? f.participants.map(pt=>{
     const canApprove = pt.delegations_status==='غير معتمد' && Perm.canApproveParticipantRecord(u,pt) && sameFed;
-    const canDelete = Perm.canManageParticipants(u,t);
+    const canDelete = Perm.canManageParticipants(u,t) && pt.delegations_status==='غير معتمد';
     const notMatchBadge = !pt.is_linked_to_trip ? `<span class="badge badge-warning" title="غير مطابق لتفاصيل الرحلة">⚠ غير مطابق</span>` : '';
+    const carBadge = pt.is_car_traveler ? `<span class="badge badge-info" title="استبدال التذكرة بتعويض سفر بالسيارة (75%)">🚗 سيارة</span>` : '';
     return `<tr>
-      <td>${esc(userLabel(pt.user_id))} ${notMatchBadge}</td>
+      <td>${esc(userLabel(pt.user_id))} ${notMatchBadge} ${carBadge}</td>
       <td>${esc(pt.ticket_type||'—')}</td>
-      <td class="num">${money(pt.total_amount)}</td>
+      <td class="num">${money(pt.ticket_price)}</td>
+      <td class="num">${money(pt.amount_delegations)}</td>
+      <td class="num"><b>${money(pt.total_amount)}</b></td>
       <td>${delegationStatusBadge(pt.delegations_status)}</td>
       <td><div class="flex gap-8 wrap">
         ${attachBtnHTML(pt.file)}
@@ -947,7 +950,7 @@ Views.tripDetail = function(tripId){
         ${canDelete?`<button class="btn btn-ghost btn-sm" onclick="Actions.deleteParticipant('${pt.delegation_id}','${t.trip_id}')">🗑 حذف</button>`:''}
       </div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="5"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
+  }).join('') : `<tr><td colspan="7"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
 
   const canAddExpense = Perm.canManageOtherExpenses(u,t);
   const expenseRows = f.otherExp.length ? f.otherExp.map(e=>{
@@ -999,7 +1002,7 @@ Views.tripDetail = function(tripId){
         </div>
       </div>
       <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
-        <table class="tbl"><thead><tr><th>المشارك</th><th>نوع التذكرة</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead>
+        <table class="tbl"><thead><tr><th>المشارك</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead>
         <tbody>${participantRows}</tbody></table>
       </div>
     </div>
@@ -1302,8 +1305,18 @@ Modals.updateParticipantField = function(key,val){
 };
 Modals.updateParticipantAmount = function(val){
   ParticipantDraft.ticket_price = val;
-  const body = document.getElementById('addParticipantModalBody');
-  if(body) body.innerHTML = Modals.renderAddParticipantBody();
+  const d = ParticipantDraft;
+  const t = participantSourceTrip();
+  const selectedUser = userById(d.user_id);
+  const resolvedType = selectedUser ? selectedUser.user_type : null;
+  const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
+  const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
+  const accommodation = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
+  const dailyAllowance = resolvedType ? computeDailyAllowance(resolvedType, t.entity, days, transport, accommodation) : 0;
+  const carEligible = t.entity==='المملكة';
+  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? Number(val||0)*0.75 : Number(val||0);
+  const el = document.getElementById('dgTotalAmount');
+  if(el) el.textContent = money(effectiveTicketCost + dailyAllowance);
 };
 Actions.saveParticipant = async function(){
   const d = ParticipantDraft;
@@ -1408,21 +1421,40 @@ Actions.deleteParticipant = async function(delegationId, tripId){
 };
 
 /* ============================= Other expenses ============================= */
+let OtherExpenseBeneficiaries = [];
 Modals.addOtherExpense = function(tripId){
+  OtherExpenseBeneficiaries = [];
   const etOpts = DB.expense_types.length
     ? DB.expense_types.map(et=>`<option value="${esc(et.expense_name_ar)}">${esc(et.expense_name_ar)}</option>`).join('')
     : `<option value="">لا توجد أنواع مصاريف مضافة بعد</option>`;
-  const body = `
+  openModalHTML(modalShell('addOtherExpenseModal','إضافة مصروف آخر', Modals.renderAddOtherExpenseBody(etOpts), false,
+    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
+     <button class="btn btn-primary" onclick="Actions.saveOtherExpense('${tripId}')">حفظ</button>`));
+};
+Modals.renderAddOtherExpenseBody = function(etOpts){
+  const beneficiaryChips = USER_TYPES.filter(t=>t!=='مراجع').map(t=>
+    `<span class="chip ${OtherExpenseBeneficiaries.includes(t)?'on':''}" onclick="Modals.toggleOeBeneficiary('${t}')">${esc(t)}</span>`
+  ).join('');
+  return `
     <div class="form-grid">
       <div class="field"><label>نوع المصروف</label><select id="oeType">${etOpts}</select></div>
-      <div class="field"><label>المستفيد</label><input type="text" id="oeBeneficiary"></div>
+      <div class="field full"><label>المستفيد (نوع المستخدم) <span class="muted">— يمكن اختيار أكثر من نوع</span></label>
+        <div class="chip-select" id="oeBeneficiarySelect">${beneficiaryChips}</div>
+      </div>
       <div class="field"><label>المبلغ</label><input type="number" id="oeAmount" min="0" step="0.01"></div>
       <div class="field full"><label>المبرر / البيان</label><textarea rows="2" id="oeJustification"></textarea></div>
       <div class="field full"><label>مرفق</label><input type="file" id="oeFile" accept="image/*,.pdf"></div>
     </div>`;
-  openModalHTML(modalShell('addOtherExpenseModal','إضافة مصروف آخر', body, false,
-    `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
-     <button class="btn btn-primary" onclick="Actions.saveOtherExpense('${tripId}')">حفظ</button>`));
+};
+Modals.toggleOeBeneficiary = function(t){
+  const i = OtherExpenseBeneficiaries.indexOf(t);
+  if(i>=0) OtherExpenseBeneficiaries.splice(i,1); else OtherExpenseBeneficiaries.push(t);
+  const el = document.getElementById('oeBeneficiarySelect');
+  if(el){
+    Array.from(el.children).forEach(chip=>{
+      chip.classList.toggle('on', OtherExpenseBeneficiaries.includes(chip.textContent));
+    });
+  }
 };
 Actions.saveOtherExpense = async function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
@@ -1430,6 +1462,7 @@ Actions.saveOtherExpense = async function(tripId){
   if(!Perm.canManageOtherExpenses(u,t)){ toast('لا تملك صلاحية إضافة مصروف','danger'); return; }
   const expType = document.getElementById('oeType').value;
   if(!expType){ toast('أضف نوع مصروف واحد على الأقل أولاً من صفحة "أنواع المصاريف"','danger'); return; }
+  if(!OtherExpenseBeneficiaries.length){ toast('اختر نوع مستخدم واحدًا على الأقل كمستفيد','danger'); return; }
   const amt = Number(document.getElementById('oeAmount').value||0);
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   let filePath = null;
@@ -1441,7 +1474,7 @@ Actions.saveOtherExpense = async function(tripId){
   }
   const saved = await dbInsert('other_expenses', {
     expense_id: uid('oex'), trip_id: tripId, federation_number: t.federation_number, expense_status:'غير معتمد',
-    expense_type: expType, beneficiary: document.getElementById('oeBeneficiary').value,
+    expense_type: expType, beneficiary: OtherExpenseBeneficiaries.join('، '),
     justification: document.getElementById('oeJustification').value, amount: amt, file: filePath,
     created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
   });
@@ -1464,12 +1497,16 @@ Actions.cancelOtherExpense = async function(expenseId){
 };
 
 /* ============================= Tickets (all delegations) list ============================= */
+let TicketFilter = 'all';
 Views.tickets = function(){
   const u = Session.user;
   const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
   let list = DB.delegations.filter(d=>tripIds.has(d.trip_id)).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
-  const sumAmt = list.filter(d=>d.delegations_status!=='مرفوض').reduce((s,d)=>s+Number(d.total_amount||0),0);
   const addBtn = Perm.canRequestTrip(u) ? `<button class="btn btn-primary" onclick="Modals.pickTripForTicket()">+ انتداب جديد</button>` : '';
+  const tabs = [{k:'all',l:'الكل'},{k:'غير معتمد',l:'غير معتمد'},{k:'معتمد',l:'معتمد'},{k:'مرفوض',l:'مرفوض'}];
+  const tabsHTML = tabs.map(tb=>`<button class="pill-tab ${TicketFilter===tb.k?'active':''}" onclick="Views.setTicketFilter('${tb.k}')">${tb.l}</button>`).join('');
+  if(TicketFilter!=='all') list = list.filter(d=>d.delegations_status===TicketFilter);
+  const sumAmt = list.filter(d=>d.delegations_status!=='مرفوض').reduce((s,d)=>s+Number(d.total_amount||0),0);
   const stats = `<div class="stats-grid">
     <div class="stat-card accent-teal"><div class="lbl">عدد التذاكر/المشاركات</div><div class="val num">${list.length}</div></div>
     <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ (باستثناء المرفوض)</div><div class="val num">${money(sumAmt)}</div></div>
@@ -1479,8 +1516,9 @@ Views.tickets = function(){
     return items.length ? items.map(d=>{
     const t = DB.trips.find(x=>x.trip_id===d.trip_id);
     const notMatchBadge = !d.is_linked_to_trip ? `<span class="badge badge-warning">⚠ غير مطابق</span>` : '';
+    const carBadge = d.is_car_traveler ? `<span class="badge badge-info">🚗 سيارة</span>` : '';
     return `<tr class="clickable-row" onclick="App.go('tripDetail',{id:'${d.trip_id}'})">
-      <td><b>${esc(userLabel(d.user_id))}</b> ${notMatchBadge}<div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
+      <td><b>${esc(userLabel(d.user_id))}</b> ${notMatchBadge} ${carBadge}<div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
       <td>${esc(d.ticket_type||'—')}</td>
       <td class="num">${money(d.ticket_price)}</td>
       <td class="num">${money(d.total_amount)}</td>
@@ -1495,6 +1533,7 @@ Views.tickets = function(){
   }
   return `
     <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div>${addBtn}</div>
+    <div class="pill-tabs mt-16">${tabsHTML}</div>
     ${stats}
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, d=>d.federation_number, tableFor, items=>{
@@ -1504,6 +1543,7 @@ Views.tickets = function(){
     </div>
   `;
 };
+Views.setTicketFilter = function(k){ TicketFilter = k; App.render(); };
 
 /* ============================= Other expenses list ============================= */
 let OtherExpFilter = 'all';
