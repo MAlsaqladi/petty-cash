@@ -74,7 +74,7 @@ const SCHEMA = {
 };
 const PK = {federations:'federation_id',users:'user_id',cost_centers:'cost_center_id',trips:'trip_id',delegations:'delegation_id',other_expenses:'expense_id'};
 
-const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','لاعب','حكم','متعاون'];
+const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','عضو مجلس الادارة','لاعب','حكم','متعاون'];
 const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const TRIP_STATUSES = ['طلب','اعتماد التكليف','الصرف','الإقفال','مرفوضة'];
 const TRIP_TYPES = ['مشاركة','بطولة','معسكر','وفود','اجتماعات'];
@@ -186,12 +186,13 @@ const Perm = {
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isHR: u => u && u.user_type === 'موارد بشرية',
+  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
   isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
-  canManageUsers: u => !Perm.isBasicStaff(u),
+  canManageUsers: u => !Perm.isBasicStaff(u) && !Perm.isBoardMember(u),
   canChangeUserStatus: u => Perm.isTopApprover(u),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
-  canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
+  canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u) || Perm.isBoardMember(u),
   /* موارد بشرية هي صاحبة صلاحية طلب الانتداب/الرحلة، وإن لم يوجد موارد بشرية بالاتحاد تنتقل للمحاسب */
   hrActiveExists: fedId => DB.users.some(x=>x.federation_id===fedId && x.user_type==='موارد بشرية' && x.user_status==='مفتوح'),
   canRequestTrip: u => {
@@ -343,9 +344,9 @@ const NAV_ITEMS = [
   {key:'trips', label:'الرحلات', ico:ICONS.plane, show:()=>true},
   {key:'tickets', label:'تذاكر السفر', ico:ICONS.ticket, show:()=>true},
   {key:'otherExpenses', label:'المصاريف الأخرى', ico:ICONS.filecheck, show:()=>true},
-  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
+  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u) || Perm.isBoardMember(u)},
   {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isBasicStaff(u)},
-  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)},
+  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)||Perm.isBoardMember(u)},
 ];
 const VIEW_META = {
   dashboard:{title:'لوحة الانتدابات', crumb:'نظرة عامة على الرحلات والمشاركين'},
