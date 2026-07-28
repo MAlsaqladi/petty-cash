@@ -82,6 +82,8 @@ const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذ�
 const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const USER_STATUSES = ['مفتوح','مغلق','تحت المعالجة','مسودة'];
 const CUSTODY_TYPES = ['عهدة نقدية دائمة','عهدة نقدية مؤقتة'];
+// الحد الأعلى لإجمالي المصاريف التقديرية (طلب + تغذية) للعهدة النقدية الدائمة فقط
+const PERMANENT_CUSTODY_MAX = 15000;
 const CURRENCIES = ['SAR','USD','EUR','AED','GBP'];
 const MAIN_COST_CENTERS = ['فني','تشغيلي','المعسكرات الداخلية','المعسكرات الخارجية','البطولات الداخلية','البطولات الخارجية','الأنشطة والمبادرات الأخرى'];
 
@@ -694,8 +696,6 @@ Views.home = function(){
   /* ---- quick actions ---- */
   const quickActions = [];
   if(Perm.canRequestCustody(u)) quickActions.push(`<button class="btn btn-primary" onclick="Modals.addCustody()">+ طلب عهدة جديدة</button>`);
-  if(Perm.canRequestCustody(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>`);
-  quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>`);
   if(Perm.canTransfer(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>`);
   if(Perm.canManageUsers(u)) quickActions.push(`<button class="btn btn-outline" onclick="Modals.addUser()">+ إضافة مستخدم</button>`);
 
@@ -940,7 +940,6 @@ Views.budgetsList = function(){
   const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div>
-      <button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -1051,7 +1050,6 @@ Views.expensesList = function(){
   const isAud = Perm.isAuditor(u);
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div>
-      <button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -1147,7 +1145,9 @@ Views.custodyDetail = function(id){
   </div>`;
 
   /* ---------------- budgets table ---------------- */
-  const canAddBudget = c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && sameFed;
+  const isPermanentCustody = c.custody_type==='عهدة نقدية دائمة';
+  const permCapReached = isPermanentCustody && f.totalBudget >= PERMANENT_CUSTODY_MAX;
+  const canAddBudget = c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && sameFed && !permCapReached;
   const budgetRows = f.budgets.length ? f.budgets.map(b=>{
     const canApproveLine = b.Record_Status==='قيد الاعتماد' && c.custody_status==='مفتوحة' && Perm.canApproveCustodyRequest(u) && sameFed;
     const canEditLine = Perm.canEditBudgetLine(u,c,b);
@@ -1172,6 +1172,7 @@ Views.custodyDetail = function(id){
         <h2 style="font-size:15px;">💰 المصاريف التقديرية</h2>
         ${canAddBudget ? `<button class="btn btn-outline btn-sm" onclick="Modals.addBudgetLine('${c.custody_id}')">+ إضافة بند${c.custody_status==='مفتوحة'?' (تغذية إضافية)':''}</button>` : ''}
       </div>
+      ${permCapReached ? `<div class="alert alert-warning" style="margin:0 0 12px;">تم بلوغ الحد الأعلى لإجمالي المصاريف التقديرية للعهدة النقدية الدائمة (${money(PERMANENT_CUSTODY_MAX)}) — لا يمكن طلب تغذية إضافية.</div>` : ''}
     </div>
     <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
       <table class="tbl"><thead><tr><th>نوع المصروف</th><th>مركز التكلفة</th><th>المبلغ التقديري</th><th>الحالة</th><th></th></tr></thead>
@@ -1251,7 +1252,12 @@ function isCustodyDraftValid(d){
   if(!d.description_ar.trim() || !d.description_en.trim() || !d.disbursement_location.trim() || !d.Closing_date) return false;
   if(!d.cost_centers.length) return false;
   if(!d.lines.length) return false;
-  return d.lines.every(l=> l.expense_type_id && l.cost_center_id && l.estimated_amount && Number(l.estimated_amount)>0);
+  if(!d.lines.every(l=> l.expense_type_id && l.cost_center_id && l.estimated_amount && Number(l.estimated_amount)>0)) return false;
+  if(d.custody_type==='عهدة نقدية دائمة'){
+    const total = d.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
+    if(total > PERMANENT_CUSTODY_MAX) return false;
+  }
+  return true;
 }
 
 /* ============================= Add Custody (request) ============================= */
@@ -1284,10 +1290,15 @@ Modals.renderAddCustodyBody = function(){
 
   const linesHTML = renderBudgetLinesEditor();
 
+  // الموظف والموارد البشرية لا يستطيعون تحويل طلب العهدة لشخص آخر — صاحب العهدة يبقى هو نفسه دائمًا
+  const holderFieldHTML = Perm.isBasicStaff(u)
+    ? `<div class="field"><label>صاحب العهدة</label><input type="text" value="${esc(u.employee_name_ar)} — ${esc(u.Job_Title||u.user_type)}" disabled><div class="hint">لا يمكنك تعديل صاحب العهدة — الطلب مسجَّل باسمك.</div></div>`
+    : `<div class="field"><label>صاحب العهدة</label><select onchange="CustodyDraft.received_by_user_id=this.value">${usersOpts}</select></div>`;
+
   return `
   <div class="form-grid">
-    <div class="field"><label>صاحب العهدة</label><select onchange="CustodyDraft.received_by_user_id=this.value">${usersOpts}</select></div>
-    <div class="field"><label>نوع العهدة</label><select onchange="CustodyDraft.custody_type=this.value">${typeOpts}</select></div>
+    ${holderFieldHTML}
+    <div class="field"><label>نوع العهدة</label><select onchange="Modals.setCustodyType(this.value)">${typeOpts}</select></div>
     <div class="field full"><label>وصف العهدة (عربي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.description_ar)}" placeholder="مثال: عهدة معسكر خارجي" oninput="Modals.updateDraftField('description_ar',this.value)"></div>
     <div class="field full"><label>وصف العهدة (إنجليزي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.description_en)}" oninput="Modals.updateDraftField('description_en',this.value)"></div>
     <div class="field"><label>مكان الصرف <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.disbursement_location)}" oninput="Modals.updateDraftField('disbursement_location',this.value)"></div>
@@ -1386,13 +1397,23 @@ function renderBudgetLinesEditor(){
     </div>`;
   }).join('');
   const total = d.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
+  const isPermanent = d.custody_type==='عهدة نقدية دائمة';
+  const overCap = isPermanent && total > PERMANENT_CUSTODY_MAX;
+  const capHint = isPermanent
+    ? `<div class="alert ${overCap?'alert-danger':'alert-info'} mt-8" id="capHintBox">الحد الأعلى لإجمالي المصاريف التقديرية للعهدة النقدية الدائمة هو <b>${money(PERMANENT_CUSTODY_MAX)}</b>.${overCap?' — تجاوزت الحد الأعلى، الرجاء تعديل المبالغ قبل الحفظ.':''}</div>`
+    : '';
   return `
+    ${capHint}
     ${rows || `<div class="lines-empty">لا توجد بنود بعد — اضغط "إضافة بند" أدناه.</div>`}
     <button class="btn btn-outline btn-sm mt-8" onclick="Modals.addLine()">+ إضافة بند مصروف تقديري</button>
-    ${d.lines.length ? `<div class="mt-12 flex between" style="font-weight:800;"><span>الإجمالي التقديري</span><span class="num" id="linesTotalAmount">${money(total)}</span></div>` : ''}
+    ${d.lines.length ? `<div class="mt-12 flex between" id="linesTotalRow" style="font-weight:800;${overCap?'color:var(--danger);':''}"><span>الإجمالي التقديري</span><span class="num" id="linesTotalAmount">${money(total)}</span></div>` : ''}
   `;
 }
 
+Modals.setCustodyType = function(val){
+  CustodyDraft.custody_type = val;
+  refreshAddCustodyModal();
+};
 Modals.addLine = function(){
   const ccDefault = CustodyDraft.cost_centers[0];
   const etDefault = DB.expense_types[0] ? DB.expense_types[0].account_number : '';
@@ -1408,10 +1429,17 @@ Modals.updateLine = function(idx, key, val){
   CustodyDraft.lines[idx][key] = val;
   if(key!=='estimated_amount') { refreshAddCustodyModal(); return; }
   // تحديث المجموع وحالة زر الحفظ فقط دون إعادة رسم الحقول (لتفادي فقدان التركيز أثناء الكتابة)
+  const total = CustodyDraft.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
   const totalEl = document.getElementById('linesTotalAmount');
-  if(totalEl){
-    const total = CustodyDraft.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
-    totalEl.textContent = money(total);
+  if(totalEl){ totalEl.textContent = money(total); }
+  const isPermanent = CustodyDraft.custody_type==='عهدة نقدية دائمة';
+  const overCap = isPermanent && total > PERMANENT_CUSTODY_MAX;
+  const rowEl = document.getElementById('linesTotalRow');
+  if(rowEl){ rowEl.style.color = overCap ? 'var(--danger)' : ''; }
+  const capBox = document.getElementById('capHintBox');
+  if(capBox){
+    capBox.className = 'alert ' + (overCap ? 'alert-danger' : 'alert-info') + ' mt-8';
+    capBox.innerHTML = `الحد الأعلى لإجمالي المصاريف التقديرية للعهدة النقدية الدائمة هو <b>${money(PERMANENT_CUSTODY_MAX)}</b>.${overCap?' — تجاوزت الحد الأعلى، الرجاء تعديل المبالغ قبل الحفظ.':''}`;
   }
   const saveBtn = document.getElementById('saveCustodyBtn');
   if(saveBtn) saveBtn.disabled = !isCustodyDraftValid(CustodyDraft);
@@ -1432,14 +1460,22 @@ function refreshAddCustodyModal(quiet){
 /* ============================= Add budget line (post-creation, while pending) ============================= */
 Modals.addBudgetLine = function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
+  const f = custodyFinancials(c);
+  const isPermanent = c.custody_type==='عهدة نقدية دائمة';
+  if(isPermanent && f.totalBudget >= PERMANENT_CUSTODY_MAX){
+    toast(`لا يمكن طلب تغذية إضافية — تم بلوغ الحد الأعلى للعهدة النقدية الدائمة (${money(PERMANENT_CUSTODY_MAX)})`, 'danger');
+    return;
+  }
+  const remaining = isPermanent ? Math.max(0, PERMANENT_CUSTODY_MAX - f.totalBudget) : null;
   const ccIds = custodyCostCenterIds(c);
   const ccList = ccIds.map(id=>DB.cost_centers.find(x=>x.cost_center_id===id)).filter(Boolean);
   const etOpts = DB.expense_types.map(et=>`<option value="${et.account_number}">${esc(et.expense_name_ar)}</option>`).join('');
   const ccOpts = ccList.map(cc=>`<option value="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</option>`).join('');
   const body = `
-    <div class="field"><label>نوع المصروف</label><select id="nbEt">${etOpts}</select></div>
+    ${isPermanent ? `<div class="alert alert-info">الحد الأعلى المتبقي المسموح لهذه العهدة الدائمة: <b>${money(remaining)}</b> (من إجمالي ${money(PERMANENT_CUSTODY_MAX)})</div>` : ''}
+    <div class="field mt-8"><label>نوع المصروف</label><select id="nbEt">${etOpts}</select></div>
     <div class="field"><label>مركز التكلفة</label><select id="nbCc">${ccOpts}</select></div>
-    <div class="field"><label>المبلغ التقديري</label><input type="number" id="nbAmt" min="0" step="0.01"></div>
+    <div class="field"><label>المبلغ التقديري</label><input type="number" id="nbAmt" min="0" ${isPermanent?`max="${remaining}"`:''} step="0.01"></div>
   `;
   openModalHTML(modalShell('addBudgetLineModal','إضافة بند مصروف تقديري', body, false,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
@@ -1575,9 +1611,14 @@ Modals.editCustody = function(custodyId){
   const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}" ${c.received_by_user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
   const typeOpts = CUSTODY_TYPES.map(t=>`<option value="${esc(t)}" ${c.custody_type===t?'selected':''}>${esc(t)}</option>`).join('');
   const ccChips = fedCC.map(cc=>`<span class="chip ${selectedCC.includes(cc.cost_center_id)?'on':''}" onclick="this.classList.toggle('on')" data-cc="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</span>`).join('');
+  // الموظف والموارد البشرية لا يستطيعون تحويل العهدة لشخص آخر عند التعديل أيضًا
+  const holder = userById(c.received_by_user_id);
+  const ecHolderHTML = Perm.isBasicStaff(u)
+    ? `<div class="field"><label>صاحب العهدة</label><input type="text" value="${esc(holder?holder.employee_name_ar:esc(u.employee_name_ar))} — ${esc(holder?(holder.Job_Title||holder.user_type):(u.Job_Title||u.user_type))}" disabled><input type="hidden" id="ecHolder" value="${esc(c.received_by_user_id)}"><div class="hint">لا يمكنك تعديل صاحب العهدة.</div></div>`
+    : `<div class="field"><label>صاحب العهدة</label><select id="ecHolder">${usersOpts}</select></div>`;
   const body = `
     <div class="form-grid">
-      <div class="field"><label>صاحب العهدة</label><select id="ecHolder">${usersOpts}</select></div>
+      ${ecHolderHTML}
       <div class="field"><label>نوع العهدة</label><select id="ecType">${typeOpts}</select></div>
       <div class="field full"><label>وصف العهدة (عربي)</label><input type="text" id="ecDescAr" value="${esc(c.description_ar||'')}"></div>
       <div class="field full"><label>وصف العهدة (إنجليزي)</label><input type="text" id="ecDescEn" value="${esc(c.description_en||'')}"></div>
@@ -1727,6 +1768,13 @@ Actions.saveCustodyRequest = async function(){
     if(!l.expense_type_id || !l.cost_center_id){ toast('تحقق من اختيار نوع المصروف ومركز التكلفة لكل بند','danger'); return; }
     if(!l.estimated_amount || Number(l.estimated_amount)<=0){ toast('تحقق من مبالغ بنود المصاريف التقديرية','danger'); return; }
   }
+  if(d.custody_type==='عهدة نقدية دائمة'){
+    const totalReq = d.lines.reduce((s,l)=>s+Number(l.estimated_amount||0),0);
+    if(totalReq > PERMANENT_CUSTODY_MAX){
+      toast(`الحد الأعلى للعهدة النقدية الدائمة هو ${money(PERMANENT_CUSTODY_MAX)} — الرجاء تعديل المبالغ`, 'danger');
+      return;
+    }
+  }
   const custodyId = uid('cus');
   const custody = {
     custody_id: custodyId, federation_id: d.federation_id, custody_status:'قيد الاعتماد',
@@ -1759,6 +1807,13 @@ Actions.saveBudgetLine = async function(custodyId){
   const cc = document.getElementById('nbCc').value;
   const amt = Number(document.getElementById('nbAmt').value);
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
+  if(c.custody_type==='عهدة نقدية دائمة'){
+    const f = custodyFinancials(c);
+    if(f.totalBudget + amt > PERMANENT_CUSTODY_MAX){
+      toast(`هذا المبلغ يتجاوز الحد الأعلى للعهدة النقدية الدائمة (${money(PERMANENT_CUSTODY_MAX)}) — المتاح حاليًا: ${money(Math.max(0,PERMANENT_CUSTODY_MAX-f.totalBudget))}`, 'danger');
+      return;
+    }
+  }
   const saved = await dbInsert('custody_budgets', {
     budget_id: uid('bud'), Record_Status:'قيد الاعتماد', federation_id: c.federation_id, custody_id: custodyId,
     expense_type_id: et, cost_center_id: cc, estimated_amount: amt,
@@ -2012,10 +2067,161 @@ Actions.updateCustody = async function(custodyId){
   App.render();
 };
 
+/* ============================= طباعة احترافية لتفاصيل العهدة ============================= */
+function buildCustodyPrintHTML(custodyId, fileUrlMap){
+  fileUrlMap = fileUrlMap || {};
+  const c = DB.custodies.find(x=>x.custody_id===custodyId);
+  if(!c) return '';
+  const f = custodyFinancials(c);
+  const fed = federationById(c.federation_id);
+  const holder = userById(c.received_by_user_id);
+  const requester = userById(c.created_by);
+  const approver = userById(c.request_approved_by);
+  const closer = userById(c.closure_approved_by);
+  const ccIds = custodyCostCenterIds(c);
+  const ccNames = ccIds.length ? ccIds.map(id2=>costCenterLabel(id2)).join('، ') : '—';
+
+  const budgetRows = f.budgets.length ? f.budgets.map(b=>`
+    <tr>
+      <td>${esc(expenseTypeLabel(b.expense_type_id))}</td>
+      <td>${esc(costCenterLabel(b.cost_center_id))}</td>
+      <td>${money(b.estimated_amount)}</td>
+      <td>${esc(b.Record_Status||'—')}</td>
+    </tr>`).join('') : `<tr><td colspan="4"><div class="print-empty">لا توجد بنود مصاريف تقديرية</div></td></tr>`;
+
+  function expenseLinksCell(e){
+    const parts = [];
+    const isLocUrl = e.entry_location && /^https?:\/\//.test(e.entry_location);
+    if(isLocUrl){ parts.push(`<a class="print-link" href="${esc(e.entry_location)}">📍 الموقع</a>`); }
+    else if(e.entry_location){ parts.push(`<span class="print-muted">${esc(e.entry_location)}</span>`); }
+    const fileUrl = e.file ? fileUrlMap[e.file] : null;
+    if(fileUrl){ parts.push(`<a class="print-link" href="${esc(fileUrl)}">📎 المرفق</a>`); }
+    else if(e.file){ parts.push(`<span class="print-muted">مرفق (غير متاح للطباعة)</span>`); }
+    return parts.length ? parts.join(' ') : '<span class="print-muted">—</span>';
+  }
+
+  const expenseRows = f.expenses.length ? f.expenses.map(e=>`
+    <tr>
+      <td>${esc(expenseTypeLabel(e.expense_type_id))}</td>
+      <td>${esc(costCenterLabel(e.cost_center_id))}</td>
+      <td>${esc(e.statement||'—')}</td>
+      <td>${money(e.amount)}</td>
+      <td>${esc(e.disbursement_status||'—')}</td>
+      <td>${esc(userLabel(e.created_by))}</td>
+      <td>${expenseLinksCell(e)}</td>
+    </tr>`).join('') : `<tr><td colspan="7"><div class="print-empty">لا توجد مصاريف فعلية مسجّلة</div></td></tr>`;
+
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
+            <div class="print-sys-name">نظام إدارة العهد النقدية</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>رقم مرجعي: ${esc(c.custody_id)}</div>
+        </div>
+      </div>
+      <h1 class="print-title">تفاصيل العهدة النقدية</h1>
+      <div class="print-subtitle">${esc(c.description_ar||'بدون وصف')} ${c.description_en?(' — '+esc(c.description_en)):''}</div>
+      <div class="print-status-row">
+        <span class="print-status-chip">الحالة: ${esc(c.custody_status||'—')}</span>
+        <span class="print-status-chip">نوع العهدة: ${esc(c.custody_type||'—')}</span>
+      </div>
+    </div>
+
+    <table class="print-kv">
+      <tr><td class="lbl">صاحب العهدة</td><td class="val">${esc(holder?holder.employee_name_ar:'—')}</td><td class="lbl">المسمى الوظيفي</td><td class="val">${esc(holder?(holder.Job_Title||holder.user_type):'—')}</td></tr>
+      <tr><td class="lbl">مكان الصرف</td><td class="val">${/^https?:\/\//.test(c.disbursement_location||'') ? `<a class="print-link" href="${esc(c.disbursement_location)}">📍 عرض الموقع</a>` : esc(c.disbursement_location||'—')}</td><td class="lbl">مقدّم الطلب</td><td class="val">${esc(requester?requester.employee_name_ar:'—')}</td></tr>
+      <tr><td class="lbl">تاريخ الطلب</td><td class="val">${fmtDate(c.created_at)}</td><td class="lbl">تاريخ الاعتماد</td><td class="val">${fmtDate(c.request_approval_date)}</td></tr>
+      <tr><td class="lbl">الرصيد الافتتاحي</td><td class="val">${money(c.Opening_balance)}</td><td class="lbl">تاريخ الإغلاق ${c.custody_status==='مغلقة'?'الفعلي':'المتوقع'}</td><td class="val">${fmtDate(c.Closing_date)}</td></tr>
+      <tr><td class="lbl">مراكز التكلفة المرتبطة</td><td class="val" colspan="3">${esc(ccNames)}</td></tr>
+    </table>
+
+    <div class="print-balance-strip">
+      <div class="print-balance-cell"><div class="lbl">الميزانية المعتمدة</div><div class="val">${money(f.approvedBudget)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">إجمالي المحوّل</div><div class="val">${money(f.totalTransferred)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">مصاريف معتمدة</div><div class="val">${money(f.approvedExpenses)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">الرصيد الحالي</div><div class="val">${money(f.remainingBalance)}</div></div>
+    </div>
+
+    <div class="print-section-title">💰 المصاريف التقديرية</div>
+    <table class="print-tbl">
+      <thead><tr><th>نوع المصروف</th><th>مركز التكلفة</th><th>المبلغ التقديري</th><th>الحالة</th></tr></thead>
+      <tbody>${budgetRows}</tbody>
+      ${f.budgets.length ? `<tfoot><tr><td colspan="2">الإجمالي</td><td>${money(f.totalBudget)}</td><td></td></tr></tfoot>` : ''}
+    </table>
+
+    <div class="print-section-title">🧾 المصاريف الفعلية</div>
+    <table class="print-tbl">
+      <thead><tr><th>نوع المصروف</th><th>مركز التكلفة</th><th>البيان</th><th>المبلغ</th><th>الحالة</th><th>بواسطة</th><th>الموقع / المرفق</th></tr></thead>
+      <tbody>${expenseRows}</tbody>
+      ${f.expenses.length ? `<tfoot><tr><td colspan="3">الإجمالي</td><td>${money(f.approvedExpenses)}</td><td colspan="3"></td></tr></tfoot>` : ''}
+    </table>
+
+    <div class="print-signoff">
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">طالب العملية</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(requester?requester.employee_name_ar:'—')}</div>
+          <div class="print-sign-date">${fmtDate(c.created_at)}</div>
+        </div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">معتمد العملية</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(approver?approver.employee_name_ar:'— لم يتم الاعتماد بعد —')}</div>
+          <div class="print-sign-date">${c.request_approval_date?fmtDate(c.request_approval_date):''}</div>
+        </div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">مقفل العملية</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(closer?closer.employee_name_ar:'— لم يتم الإقفال بعد —')}</div>
+          <div class="print-sign-date">${c.closure_approval_date?fmtDate(c.closure_approval_date):''}</div>
+        </div>
+      </div>
+    </div>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية — عدد مرات الطباعة: ${Number(c.Print_Count||0)+1}</div>
+  </div>`;
+}
+
+async function getSignedFileUrl(filePath){
+  if(!filePath) return null;
+  try{
+    const res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: filePath }) });
+    const json = await res.json();
+    if(json.error || !json.data) return null;
+    return json.data.url;
+  }catch(e){ return null; }
+}
+
 Actions.printCustody = async function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
+  if(!c) return;
+  toast('جارٍ تجهيز نسخة الطباعة…', 'success');
   await dbUpdate('custodies','custody_id',custodyId, { Print_Count: Number(c.Print_Count||0) + 1 });
-  window.print();
+  // نجهّز روابط موقّعة لكل مرفقات المصاريف الفعلية المرتبطة بهذه العهدة قبل الطباعة
+  const f = custodyFinancials(c);
+  const filePaths = Array.from(new Set(f.expenses.map(e=>e.file).filter(Boolean)));
+  const fileUrlMap = {};
+  if(filePaths.length){
+    const urls = await Promise.all(filePaths.map(p=>getSignedFileUrl(p)));
+    filePaths.forEach((p,i)=>{ if(urls[i]) fileUrlMap[p] = urls[i]; });
+  }
+  let area = document.getElementById('printArea');
+  if(!area){
+    area = document.createElement('div');
+    area.id = 'printArea';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = buildCustodyPrintHTML(custodyId, fileUrlMap);
+  setTimeout(()=>window.print(), 80);
 };
 Views.users = function(){
   const u = Session.user;
