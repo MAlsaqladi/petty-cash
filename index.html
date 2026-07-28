@@ -77,7 +77,7 @@ const SCHEMA = {
 };
 const PK = {federations:'federation_id',users:'user_id',custodies:'custody_id',custody_closures:'closure_id',custody_transfers:'transfer_id',custody_budgets:'budget_id',expense_types:'account_number',cost_centers:'cost_center_id'};
 
-const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','لاعب','حكم','متعاون'];
+const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','عضو مجلس الادارة','لاعب','حكم','متعاون'];
 // أنواع لا يُسمح لها بتسجيل الدخول إلى أي نظام إطلاقًا (سجلات فقط داخل النظام)
 const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const USER_STATUSES = ['مفتوح','مغلق','تحت المعالجة','مسودة'];
@@ -136,16 +136,20 @@ const Perm = {
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isHR: u => u && u.user_type === 'موارد بشرية',
+  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
   isPlayer: u => u && u.user_type === 'لاعب',
   isReferee: u => u && u.user_type === 'حكم',
   isCollaborator: u => u && u.user_type === 'متعاون',
   // الموارد البشرية لها نفس صلاحيات الموظف تمامًا
   isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
-  canManageUsers: u => !Perm.isBasicStaff(u),
+  // عضو مجلس الإدارة: يشوف كل شيء مثل رئيس الاتحاد تمامًا، لكن لا يعتمد/يوافق على شيء،
+  // ولا يضيف مستخدمين، وعهدته الخاصة به فقط (طلب/صرف/تغذية) — ولا يقدر يحوّل رصيد إطلاقًا.
+  isRestrictedToOwnCustody: u => Perm.isBasicStaff(u) || Perm.isBoardMember(u),
+  canManageUsers: u => !Perm.isBasicStaff(u) && !Perm.isBoardMember(u),
   canChangeUserStatus: u => Perm.isTopApprover(u),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
-  canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
+  canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u) || Perm.isBoardMember(u),
   canAddExpenseType: u => Perm.isAuditor(u),
   canRequestCustody: u => !Perm.isAuditor(u),
   canApproveCustodyRequest: u => Perm.isTopApprover(u),
@@ -528,10 +532,10 @@ const NAV_ITEMS = [
   {key:'budgetslist', label:'المصاريف التقديرية', ico:ICONS.clipboard, show: ()=>true},
   {key:'transferslist', label:'التحويلات', ico:ICONS.exchange, show: ()=>true},
   {key:'expenseslist', label:'المصاريف الفعلية', ico:ICONS.filecheck, show: ()=>true},
-  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u)},
+  {key:'users', label:'المستخدمون', ico:ICONS.users, show: u=>Perm.canManageUsers(u) || Perm.isAuditor(u) || Perm.isBoardMember(u)},
   {key:'costcenters', label:'مراكز التكلفة', ico:ICONS.tag, show: u=>!Perm.isBasicStaff(u)},
   {key:'expensetypes', label:'أنواع المصاريف', ico:ICONS.list, show: u=>true},
-  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)},
+  {key:'federations', label: u=>Perm.isAuditor(u)?'الاتحادات':'بيانات الاتحاد', ico:ICONS.building, show: u=>Perm.isAuditor(u)||Perm.isTopApprover(u)||Perm.isBoardMember(u)},
 ];
 
 App.renderShell = function(){
@@ -1151,7 +1155,8 @@ Views.custodyDetail = function(id){
   /* ---------------- budgets table ---------------- */
   const isPermanentCustody = c.custody_type==='عهدة نقدية دائمة';
   const permCapReached = isPermanentCustody && f.totalBudget >= PERMANENT_CUSTODY_MAX;
-  const canAddBudget = c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && sameFed && !permCapReached;
+  const canAddBudget = c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && sameFed && !permCapReached
+    && (!Perm.isRestrictedToOwnCustody(u) || u.user_id===c.received_by_user_id);
   const budgetRows = f.budgets.length ? f.budgets.map(b=>{
     const canApproveLine = b.Record_Status==='قيد الاعتماد' && c.custody_status==='مفتوحة' && Perm.canApproveCustodyRequest(u) && sameFed;
     const canEditLine = Perm.canEditBudgetLine(u,c,b);
@@ -1294,8 +1299,8 @@ Modals.renderAddCustodyBody = function(){
 
   const linesHTML = renderBudgetLinesEditor();
 
-  // الموظف والموارد البشرية لا يستطيعون تحويل طلب العهدة لشخص آخر — صاحب العهدة يبقى هو نفسه دائمًا
-  const holderFieldHTML = Perm.isBasicStaff(u)
+  // الموظف والموارد البشرية وعضو مجلس الإدارة لا يستطيعون تحويل طلب العهدة لشخص آخر — صاحب العهدة يبقى هو نفسه دائمًا
+  const holderFieldHTML = Perm.isRestrictedToOwnCustody(u)
     ? `<div class="field"><label>صاحب العهدة</label><input type="text" value="${esc(u.employee_name_ar)} — ${esc(u.Job_Title||u.user_type)}" disabled><div class="hint">لا يمكنك تعديل صاحب العهدة — الطلب مسجَّل باسمك.</div></div>`
     : `<div class="field"><label>صاحب العهدة</label><select onchange="CustodyDraft.received_by_user_id=this.value">${usersOpts}</select></div>`;
 
@@ -1615,9 +1620,9 @@ Modals.editCustody = function(custodyId){
   const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}" ${c.received_by_user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
   const typeOpts = CUSTODY_TYPES.map(t=>`<option value="${esc(t)}" ${c.custody_type===t?'selected':''}>${esc(t)}</option>`).join('');
   const ccChips = fedCC.map(cc=>`<span class="chip ${selectedCC.includes(cc.cost_center_id)?'on':''}" onclick="this.classList.toggle('on')" data-cc="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</span>`).join('');
-  // الموظف والموارد البشرية لا يستطيعون تحويل العهدة لشخص آخر عند التعديل أيضًا
+  // الموظف والموارد البشرية وعضو مجلس الإدارة لا يستطيعون تحويل العهدة لشخص آخر عند التعديل أيضًا
   const holder = userById(c.received_by_user_id);
-  const ecHolderHTML = Perm.isBasicStaff(u)
+  const ecHolderHTML = Perm.isRestrictedToOwnCustody(u)
     ? `<div class="field"><label>صاحب العهدة</label><input type="text" value="${esc(holder?holder.employee_name_ar:esc(u.employee_name_ar))} — ${esc(holder?(holder.Job_Title||holder.user_type):(u.Job_Title||u.user_type))}" disabled><input type="hidden" id="ecHolder" value="${esc(c.received_by_user_id)}"><div class="hint">لا يمكنك تعديل صاحب العهدة.</div></div>`
     : `<div class="field"><label>صاحب العهدة</label><select id="ecHolder">${usersOpts}</select></div>`;
   const body = `
@@ -1643,7 +1648,7 @@ Modals.pickCustody = function(kind){
   const titles = {feed:'اختر عهدة لطلب تغذية إضافية', expense:'اختر عهدة لتسجيل مصروف', transfer:'اختر عهدة لتحويل رصيد'};
   let eligible = visibleCustodies(u).filter(c=>c.federation_id===u.federation_id);
   if(kind==='feed'){
-    eligible = eligible.filter(c=> c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u));
+    eligible = eligible.filter(c=> c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && (!Perm.isRestrictedToOwnCustody(u) || u.user_id===c.received_by_user_id));
   } else if(kind==='expense'){
     eligible = eligible.filter(c=> c.custody_status==='مفتوحة' && custodyFinancials(c).availableToSpend>0 && (u.user_id===c.received_by_user_id || Perm.isAccountant(u)));
   } else if(kind==='transfer'){
@@ -1806,7 +1811,9 @@ Actions.saveCustodyRequest = async function(){
 
 Actions.saveBudgetLine = async function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
+  const u = Session.user;
   if(c.custody_status==='مغلقة' || c.custody_status==='مرفوضة'){ toast('لا يمكن إضافة بند لعهدة مغلقة أو مرفوضة','danger'); return; }
+  if(Perm.isRestrictedToOwnCustody(u) && u.user_id!==c.received_by_user_id){ toast('لا تملك صلاحية إضافة بند لهذه العهدة','danger'); return; }
   const et = document.getElementById('nbEt').value;
   const cc = document.getElementById('nbCc').value;
   const amt = Number(document.getElementById('nbAmt').value);
