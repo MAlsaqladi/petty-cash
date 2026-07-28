@@ -55,6 +55,9 @@ const ALLOWED_TABLES = new Set([
 ]);
 const ALLOWED_RPC = new Set(['login', 'change_password']);
 
+// أنواع المستخدمين الممنوعة من تسجيل الدخول إلى أي نظام (سجلات فقط، بلا وصول)
+const NO_LOGIN_USER_TYPES = new Set(['لاعب', 'حكم', 'متعاون']);
+
 app.post('/api/db', async (req, res) => {
   if (!supabase) {
     return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد: أضف SUPABASE_URL و SUPABASE_SERVICE_KEY في إعدادات البيئة على Render.' } });
@@ -79,8 +82,13 @@ app.post('/api/db', async (req, res) => {
     } else {
       return res.status(400).json({ data: null, error: { message: 'عملية غير معروفة: ' + op } });
     }
-    const { data, error } = await query;
+    let { data, error } = await query;
     if (error) return res.status(200).json({ data: null, error: { message: error.message } });
+    // حاجز أمان إضافي على مستوى الخادم: بعض أنواع المستخدمين (لاعب/حكم/متعاون)
+    // لا يُسمح لها بتسجيل الدخول إلى أي نظام إطلاقًا، حتى لو كانت بياناتها صحيحة.
+    if (op === 'rpc' && fn === 'login' && Array.isArray(data)) {
+      data = data.filter(u => !NO_LOGIN_USER_TYPES.has(u.user_type));
+    }
     res.json({ data, error: null });
   } catch (e) {
     console.error(e);
@@ -123,8 +131,10 @@ app.post('/api/file-url', express.json(), async (req, res) => {
 /* -------------------------------------------------------------------
    تقديم الواجهة الثابتة (index.html)
    ------------------------------------------------------------------- */
-app.use(express.static(path.join(__dirname), { extensions: ['html'], index: 'index.html', maxAge: '5m' }));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+// login.html هي نقطة الدخول الرئيسية (اختيار النظام ثم تسجيل الدخول).
+// index.html = نظام العهد النقدية، secondments.html = نظام الانتدابات وتذاكر السفر.
+app.use(express.static(path.join(__dirname), { extensions: ['html'], index: 'login.html', maxAge: '5m' }));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
 
 app.listen(PORT, () => {
   console.log(`✓ الخادم يعمل على المنفذ ${PORT}`);
