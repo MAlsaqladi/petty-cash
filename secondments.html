@@ -78,9 +78,38 @@ const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذ�
 const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const TRIP_STATUSES = ['طلب','اعتماد التكليف','الصرف','الإقفال','مرفوضة'];
 const TRIP_TYPES = ['مشاركة','بطولة','معسكر','وفود','اجتماعات'];
-const ENTITIES = ['المملكة','أفريقيا والشرق الأوسط','آسيا','أوروبا'];
+const ENTITIES = ['المملكة','مجلس التعاون الخليجي والشرق الأوسط','آسيا','أوروبا والأمريكتان'];
 const TICKET_TYPES = ['اقتصادية','أعمال'];
 const DELEGATION_STATUSES = ['غير معتمد','معتمد','مرفوض'];
+
+/* جدول البدل اليومي الرسمي (ريال سعودي) حسب المسمى الوظيفي والوجهة */
+const DAILY_ALLOWANCE_TABLE = {
+  'رئيس':      { 'المملكة':1800, 'مجلس التعاون الخليجي والشرق الأوسط':2200, 'آسيا':2500, 'أوروبا والأمريكتان':3000 },
+  'مدير':      { 'المملكة':1100, 'مجلس التعاون الخليجي والشرق الأوسط':1500, 'آسيا':1800, 'أوروبا والأمريكتان':2500 },
+  'إداري':     { 'المملكة':600,  'مجلس التعاون الخليجي والشرق الأوسط':1200, 'آسيا':1500, 'أوروبا والأمريكتان':2000 },
+  'لاعب':      { 'المملكة':100,  'مجلس التعاون الخليجي والشرق الأوسط':150,  'آسيا':150,  'أوروبا والأمريكتان':150  }
+};
+/* تحديد فئة البدل حسب نوع المستخدم — عضو مجلس الإدارة يُعامل كإداري افتراضيًا
+   إلا إذا كان ينوب فعليًا عن رئيس الاتحاد (حالة استثنائية تحتاج تحديدًا يدويًا لاحقًا) */
+function allowanceTier(userType){
+  if(userType==='رئيس الاتحاد') return 'رئيس';
+  if(userType==='مدير تنفيذي') return 'مدير';
+  if(userType==='لاعب') return 'لاعب';
+  return 'إداري'; // محاسب / موظف / موارد بشرية / حكم / متعاون / عضو مجلس الإدارة / مراجع
+}
+/* نسبة الخصم من البدل اليومي حسب توفير الاتحاد للنقل و/أو السكن */
+function allowanceReductionFactor(transport, accommodation){
+  if(transport && accommodation) return 0.20; // خصم 80%
+  if(accommodation) return 0.50;              // خصم 50%
+  if(transport) return 0.80;                  // خصم 20%
+  return 1.0;                                  // بدون خصم
+}
+function computeDailyAllowance(userType, entity, days, transport, accommodation){
+  const tier = allowanceTier(userType);
+  const rate = (DAILY_ALLOWANCE_TABLE[tier] && DAILY_ALLOWANCE_TABLE[tier][entity]) || 0;
+  const factor = allowanceReductionFactor(!!transport, !!accommodation);
+  return Math.round(rate * factor * Number(days||0) * 100) / 100;
+}
 const EXPENSE_STATUSES = ['غير معتمد','معتمد','ملغى'];
 
 let DB = null;
@@ -145,6 +174,13 @@ async function dbUpdate(table, pkField, id, patch){
   if(idx >= 0) DB[table][idx] = data;
   return data;
 }
+async function dbDelete(table, pkField, id){
+  const { error } = await apiCall({ op:'delete', table, pkField, id });
+  if(error){ toast('تعذّر الحذف: ' + error.message, 'danger'); return false; }
+  const idx = DB[table].findIndex(r => r[pkField] === id);
+  if(idx >= 0) DB[table].splice(idx,1);
+  return true;
+}
 async function dbInsertUser(obj){
   const { error } = await apiCall({ op:'insert', table:'users', payload: obj, returning:false });
   if(error){ toast('تعذّر حفظ المستخدم: ' + error.message, 'danger'); return null; }
@@ -207,6 +243,15 @@ const Perm = {
   canEditTrip: (u,t) => t && t.trip_status==='طلب' && u.federation_id===t.federation_number && (u.user_id===t.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
   canManageParticipants: (u,t) => t && t.trip_status!=='الإقفال' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
   canApproveParticipant: u => Perm.isTopApprover(u),
+  /* منع الموافقة الذاتية: لو المشارك نفسه رئيس الاتحاد، ما يوافق عليه إلا المدير التنفيذي، والعكس صحيح */
+  canApproveParticipantRecord: (u, participant) => {
+    if(!Perm.isTopApprover(u)) return false;
+    const participantUser = userById(participant.user_id);
+    const pType = participantUser ? participantUser.user_type : participant.user_type;
+    if(pType==='رئيس الاتحاد') return Perm.isExec(u);
+    if(pType==='مدير تنفيذي') return Perm.isPresident(u);
+    return true;
+  },
   canManageOtherExpenses: (u,t) => t && t.trip_status!=='الإقفال' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
   canApproveOtherExpense: u => Perm.isTopApprover(u),
 };
@@ -613,6 +658,161 @@ Actions.saveTrip = async function(){
   App.go('tripDetail',{id:tripId});
 };
 
+/* ============================= طباعة تفاصيل الرحلة (Actions.printTrip) ============================= */
+async function getSignedFileUrl(filePath){
+  if(!filePath) return null;
+  try{
+    const res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: filePath }) });
+    const json = await res.json();
+    if(json.error || !json.data) return null;
+    return json.data.url;
+  }catch(e){ return null; }
+}
+function buildTripPrintHTML(tripId, fileUrlMap){
+  fileUrlMap = fileUrlMap || {};
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  if(!t) return '';
+  const fed = federationById(t.federation_number);
+  const requester = userById(t.created_by);
+  const approver = userById(t.request_approved_by);
+  const closer = userById(t.closure_approved_by);
+  const f = tripFinancials(t);
+  const ccNames = tripCostCenterIds(t).map(id=>costCenterLabel(id)).join('، ') || '—';
+
+  function fileLink(path){
+    const url = path ? fileUrlMap[path] : null;
+    if(url) return `<a class="print-link" href="${esc(url)}">📎 المرفق</a>`;
+    if(path) return `<span class="print-muted">مرفق (غير متاح للطباعة)</span>`;
+    return '<span class="print-muted">—</span>';
+  }
+
+  const participantRows = f.participants.length ? f.participants.map(p=>`
+    <tr>
+      <td>${esc(userLabel(p.user_id))}${!p.is_linked_to_trip?' ⚠':''}</td>
+      <td>${esc(p.user_type||'—')}</td>
+      <td>${esc(p.ticket_type||'—')}</td>
+      <td>${money(p.ticket_price)}</td>
+      <td>${money(p.amount_delegations)}</td>
+      <td>${money(p.total_amount)}</td>
+      <td>${esc(p.delegations_status||'—')}</td>
+      <td>${fileLink(p.file)}</td>
+    </tr>`).join('') : `<tr><td colspan="8"><div class="print-empty">لا يوجد مشاركون</div></td></tr>`;
+
+  const expenseRows = f.otherExp.length ? f.otherExp.map(e=>`
+    <tr>
+      <td>${esc(e.expense_type||'—')}</td>
+      <td>${esc(e.beneficiary||'—')}</td>
+      <td>${money(e.amount)}</td>
+      <td>${esc(e.expense_status||'—')}</td>
+      <td>${fileLink(e.file)}</td>
+    </tr>`).join('') : `<tr><td colspan="5"><div class="print-empty">لا توجد مصاريف أخرى</div></td></tr>`;
+
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
+            <div class="print-sys-name">نظام إدارة الانتدابات وتذاكر السفر</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>رقم مرجعي: ${esc(t.trip_id)}</div>
+        </div>
+      </div>
+      <h1 class="print-title">تفاصيل الرحلة / الانتداب</h1>
+      <div class="print-subtitle">${esc(t.trip_name_ar||'—')} ${t.trip_name_en?(' — '+esc(t.trip_name_en)):''}</div>
+      <div class="print-status-row">
+        <span class="print-status-chip">الحالة: ${esc(t.trip_status||'—')}</span>
+        <span class="print-status-chip">نوع الرحلة: ${esc(t.trip_type||'—')}</span>
+        <span class="print-status-chip">الجهة: ${esc(t.entity||'—')}</span>
+      </div>
+    </div>
+
+    <table class="print-kv">
+      <tr><td class="lbl">مقدّم الطلب</td><td class="val">${esc(requester?requester.employee_name_ar:'—')}</td><td class="lbl">مركز التكلفة</td><td class="val">${esc(ccNames)}</td></tr>
+      <tr><td class="lbl">تاريخ البداية</td><td class="val">${fmtDate(t.start_date)}</td><td class="lbl">تاريخ النهاية</td><td class="val">${fmtDate(t.end_date)}</td></tr>
+      <tr><td class="lbl">عدد الأيام</td><td class="val">${esc(t.trip_days_count||'—')}</td><td class="lbl">تاريخ الطلب</td><td class="val">${fmtDate(t.created_at)}</td></tr>
+      <tr><td class="lbl">يشمل نقل؟</td><td class="val">${t.is_transportation_available?'نعم':'لا'}</td><td class="lbl">يشمل سكن؟</td><td class="val">${t.is_accommodation_available?'نعم':'لا'}</td></tr>
+      ${t.justifications?`<tr><td class="lbl">المبررات</td><td class="val" colspan="3">${esc(t.justifications)}</td></tr>`:''}
+      ${t.desired_results?`<tr><td class="lbl">الأهداف المطلوب تحقيقها</td><td class="val" colspan="3">${esc(t.desired_results)}</td></tr>`:''}
+      ${t.achieved_results?`<tr><td class="lbl">الأهداف المحققة</td><td class="val" colspan="3">${esc(t.achieved_results)}</td></tr>`:''}
+    </table>
+
+    <div class="print-balance-strip">
+      <div class="print-balance-cell"><div class="lbl">عدد المشاركين</div><div class="val">${f.participants.length}</div></div>
+      <div class="print-balance-cell"><div class="lbl">مصاريف معتمدة</div><div class="val">${money(f.approvedParticipantsAmt+f.approvedOtherAmt)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">مصاريف معلّقة</div><div class="val">${money(f.pendingParticipantsAmt+f.pendingOtherAmt)}</div></div>
+      <div class="print-balance-cell"><div class="lbl">الإجمالي</div><div class="val">${money(f.totalApproved+f.totalPending)}</div></div>
+    </div>
+
+    <div class="print-section-title">👥 المشاركون في الانتداب (⚠ = غير مطابق لتفاصيل الرحلة)</div>
+    <table class="print-tbl">
+      <thead><tr><th>المشارك</th><th>النوع</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th>المرفق</th></tr></thead>
+      <tbody>${participantRows}</tbody>
+      ${f.participants.length ? `<tfoot><tr><td colspan="5">الإجمالي</td><td>${money(f.participants.reduce((s,p)=>s+Number(p.total_amount||0),0))}</td><td colspan="2"></td></tr></tfoot>` : ''}
+    </table>
+
+    <div class="print-section-title">🧾 المصاريف الأخرى</div>
+    <table class="print-tbl">
+      <thead><tr><th>نوع المصروف</th><th>المستفيد</th><th>المبلغ</th><th>الحالة</th><th>المرفق</th></tr></thead>
+      <tbody>${expenseRows}</tbody>
+      ${f.otherExp.length ? `<tfoot><tr><td colspan="2">الإجمالي</td><td>${money(f.otherExp.reduce((s,e)=>s+Number(e.amount||0),0))}</td><td colspan="2"></td></tr></tfoot>` : ''}
+    </table>
+
+    <div class="print-signoff">
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">طالب الرحلة</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(requester?requester.employee_name_ar:'—')}</div>
+          <div class="print-sign-date">${fmtDate(t.created_at)}</div>
+        </div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">معتمد التكليف</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(approver?approver.employee_name_ar:'— لم يتم الاعتماد بعد —')}</div>
+          <div class="print-sign-date">${t.request_approval_date?fmtDate(t.request_approval_date):''}</div>
+        </div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">مقفل الرحلة</div>
+        <div class="print-sign-line">
+          <div class="print-sign-name">${esc(closer?closer.employee_name_ar:'— لم يتم الإقفال بعد —')}</div>
+          <div class="print-sign-date">${t.closure_approval_date?fmtDate(t.closure_approval_date):''}</div>
+        </div>
+      </div>
+    </div>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة الانتدابات وتذاكر السفر</div>
+  </div>`;
+}
+Actions.printTrip = async function(tripId){
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  if(!t) return;
+  toast('جارٍ تجهيز نسخة الطباعة…', 'success');
+  const f = tripFinancials(t);
+  const filePaths = Array.from(new Set([
+    ...f.participants.map(p=>p.file),
+    ...f.otherExp.map(e=>e.file)
+  ].filter(Boolean)));
+  const fileUrlMap = {};
+  if(filePaths.length){
+    const urls = await Promise.all(filePaths.map(p=>getSignedFileUrl(p)));
+    filePaths.forEach((p,i)=>{ if(urls[i]) fileUrlMap[p] = urls[i]; });
+  }
+  let area = document.getElementById('printArea');
+  if(!area){
+    area = document.createElement('div');
+    area.id = 'printArea';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = buildTripPrintHTML(tripId, fileUrlMap);
+  setTimeout(()=>window.print(), 80);
+};
+
 /* ============================= Trip detail ============================= */
 Views.tripDetail = function(tripId){
   const u = Session.user;
@@ -628,6 +828,7 @@ Views.tripDetail = function(tripId){
   const ccNames = tripCostCenterIds(t).map(id=>costCenterLabel(id)).join('، ') || '—';
 
   const actionBtns = [];
+  actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Actions.printTrip('${t.trip_id}')">🖨 طباعة</button>`);
   if(Perm.canEditTrip(u,t)) actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Modals.editTrip('${t.trip_id}')">✎ تعديل</button>`);
   if(t.trip_status==='طلب' && Perm.canApproveTrip(u) && sameFed){
     actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Actions.approveTripAssignment('${t.trip_id}')">✔ اعتماد التكليف</button>`);
@@ -642,9 +843,11 @@ Views.tripDetail = function(tripId){
 
   const canAddParticipant = Perm.canManageParticipants(u,t);
   const participantRows = f.participants.length ? f.participants.map(pt=>{
-    const canApprove = pt.delegations_status==='غير معتمد' && Perm.canApproveParticipant(u) && sameFed;
+    const canApprove = pt.delegations_status==='غير معتمد' && Perm.canApproveParticipantRecord(u,pt) && sameFed;
+    const canDelete = Perm.canManageParticipants(u,t);
+    const notMatchBadge = !pt.is_linked_to_trip ? `<span class="badge badge-warning" title="غير مطابق لتفاصيل الرحلة">⚠ غير مطابق</span>` : '';
     return `<tr>
-      <td>${esc(userLabel(pt.user_id))}</td>
+      <td>${esc(userLabel(pt.user_id))} ${notMatchBadge}</td>
       <td>${esc(pt.ticket_type||'—')}</td>
       <td class="num">${money(pt.total_amount)}</td>
       <td>${delegationStatusBadge(pt.delegations_status)}</td>
@@ -652,6 +855,7 @@ Views.tripDetail = function(tripId){
         ${attachBtnHTML(pt.file)}
         <button class="btn btn-ghost btn-sm" onclick="Modals.viewParticipant('${pt.delegation_id}')">تفاصيل</button>
         ${canApprove?`<button class="btn btn-primary btn-sm" onclick="Actions.approveParticipant('${pt.delegation_id}')">اعتماد</button><button class="btn btn-danger btn-sm" onclick="Actions.rejectParticipant('${pt.delegation_id}')">رفض</button>`:''}
+        ${canDelete?`<button class="btn btn-ghost btn-sm" onclick="Actions.deleteParticipant('${pt.delegation_id}','${t.trip_id}')">🗑 حذف</button>`:''}
       </div></td>
     </tr>`;
   }).join('') : `<tr><td colspan="5"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
@@ -733,14 +937,29 @@ Modals.editTrip = function(tripId){
   const typeOpts = TRIP_TYPES.map(x=>`<option value="${esc(x)}" ${t.trip_type===x?'selected':''}>${esc(x)}</option>`).join('');
   const entityOpts = ENTITIES.map(x=>`<option value="${esc(x)}" ${t.entity===x?'selected':''}>${esc(x)}</option>`).join('');
   const ccChips = fedCC.map(cc=>`<span class="chip ${selectedCC.includes(cc.cost_center_id)?'on':''}" onclick="this.classList.toggle('on')" data-cc="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</span>`).join('');
+  const hasParticipants = tripParticipants(tripId).length > 0;
+  const lockNote = hasParticipants ? `<div class="alert alert-warning full">تم إضافة مشاركين لهذه الرحلة، لذلك لا يمكن تعديل تاريخ البداية/النهاية أو النقل أو السكن — احذف كل المشاركين أولاً من صفحة تفاصيل الرحلة إذا احتجت تعديل هذه الحقول.</div>` : '';
+  const dateBlock = hasParticipants ? `
+    <div class="field"><label>تاريخ البداية</label><input type="text" value="${fmtDate(t.start_date)}" disabled></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="text" value="${fmtDate(t.end_date)}" disabled></div>
+    <div class="field"><label>يشمل نقل؟</label><input type="text" value="${t.is_transportation_available?'نعم':'لا'}" disabled></div>
+    <div class="field"><label>يشمل سكن؟</label><input type="text" value="${t.is_accommodation_available?'نعم':'لا'}" disabled></div>
+  ` : `
+    <div class="field"><label>تاريخ البداية</label><input type="date" id="etStart" value="${t.start_date?String(t.start_date).slice(0,10):''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" id="etEnd" value="${t.end_date?String(t.end_date).slice(0,10):''}"></div>
+    <div class="field"><label>يشمل نقل؟</label><select id="etTransport">
+      <option value="false" ${!t.is_transportation_available?'selected':''}>لا</option><option value="true" ${t.is_transportation_available?'selected':''}>نعم</option></select></div>
+    <div class="field"><label>يشمل سكن؟</label><select id="etAccom">
+      <option value="false" ${!t.is_accommodation_available?'selected':''}>لا</option><option value="true" ${t.is_accommodation_available?'selected':''}>نعم</option></select></div>
+  `;
   const body = `
     <div class="form-grid">
+      ${lockNote}
       <div class="field full"><label>اسم الرحلة (عربي)</label><input type="text" id="etNameAr" value="${esc(t.trip_name_ar||'')}"></div>
       <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" id="etNameEn" value="${esc(t.trip_name_en||'')}"></div>
       <div class="field"><label>نوع الرحلة</label><select id="etType">${typeOpts}</select></div>
       <div class="field"><label>إلى أين</label><select id="etEntity">${entityOpts}</select></div>
-      <div class="field"><label>تاريخ البداية</label><input type="date" id="etStart" value="${t.start_date?String(t.start_date).slice(0,10):''}"></div>
-      <div class="field"><label>تاريخ النهاية</label><input type="date" id="etEnd" value="${t.end_date?String(t.end_date).slice(0,10):''}"></div>
+      ${dateBlock}
       <div class="field full"><label>مراكز التكلفة</label><div class="chip-select" id="etCcSelect">${ccChips}</div></div>
     </div>`;
   openModalHTML(modalShell('editTripModal','تعديل بيانات الرحلة', body, true,
@@ -752,17 +971,22 @@ Actions.updateTrip = async function(tripId){
   const u = Session.user;
   if(!Perm.canEditTrip(u,t)){ toast('لا يمكن تعديل هذه الرحلة','danger'); return; }
   const ccIds = Array.from(document.querySelectorAll('#etCcSelect .chip.on')).map(el=>el.dataset.cc);
-  const start = document.getElementById('etStart').value;
-  const end = document.getElementById('etEnd').value;
-  const days = (start&&end) ? Math.max(1, Math.round((new Date(end)-new Date(start))/86400000)+1) : t.trip_days_count;
+  const hasParticipants = tripParticipants(tripId).length > 0;
   const patch = {
     trip_name_ar: document.getElementById('etNameAr').value,
     trip_name_en: document.getElementById('etNameEn').value,
     trip_type: document.getElementById('etType').value,
     entity: document.getElementById('etEntity').value,
-    start_date: start||null, end_date: end||null, trip_days_count: days,
     cost_centers_id: ccIds.join(',')
   };
+  if(!hasParticipants){
+    const start = document.getElementById('etStart').value;
+    const end = document.getElementById('etEnd').value;
+    const days = (start&&end) ? Math.max(1, Math.round((new Date(end)-new Date(start))/86400000)+1) : t.trip_days_count;
+    patch.start_date = start||null; patch.end_date = end||null; patch.trip_days_count = days;
+    patch.is_transportation_available = document.getElementById('etTransport').value==='true';
+    patch.is_accommodation_available = document.getElementById('etAccom').value==='true';
+  }
   const saved = await dbUpdate('trips','trip_id',tripId,patch);
   if(!saved) return;
   closeModal(); toast('تم حفظ التعديل','success'); App.go('tripDetail',{id:tripId});
@@ -774,7 +998,19 @@ Actions.approveTripAssignment = async function(tripId){
   if(!Perm.canApproveTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
   const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'اعتماد التكليف', request_approved_by:u.user_id, request_approval_date:nowISO() });
   if(!saved) return;
-  toast('تم اعتماد التكليف','success'); App.render();
+  // اعتماد سريع لكل المشاركين المعلَّقين الذين تسمح لهذا المستخدم بالموافقة عليهم
+  // (باستثناء مشاركين هم أنفسهم رئيس الاتحاد/المدير التنفيذي إن لم يكن المعتمِد مخوّلًا بالموافقة عليهم)
+  const pending = tripParticipants(tripId).filter(p=>p.delegations_status==='غير معتمد');
+  let approvedCount = 0;
+  for(const p of pending){
+    if(Perm.canApproveParticipantRecord(u,p)){
+      await dbUpdate('delegations','delegation_id',p.delegation_id,{ delegations_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
+      approvedCount++;
+    }
+  }
+  const remaining = pending.length - approvedCount;
+  toast(`تم اعتماد التكليف${approvedCount?` واعتماد ${approvedCount} مشارك تلقائيًا`:''}${remaining?` — ${remaining} مشارك بحاجة لموافقة مستقلة (تعارض مصالح)`:''}`,'success');
+  App.render();
 };
 Actions.rejectTrip = async function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
@@ -823,6 +1059,18 @@ function sourceDaysCount(t){
   if(!t || !t.start_date || !t.end_date) return null;
   return Math.max(1, Math.round((new Date(t.end_date)-new Date(t.start_date))/86400000)+1);
 }
+Modals.pickTripForTicket = function(){
+  const u = Session.user;
+  const eligible = visibleTrips(u).filter(t=>t.federation_number===u.federation_id && t.trip_status==='طلب');
+  const rows = eligible.length ? eligible.map(t=>`
+    <div class="activity-row" onclick="closeModal(); Modals.addParticipant('${t.trip_id}')">
+      <span class="ai">✈️</span>
+      <span class="at grow"><b>${esc(t.trip_name_ar)}</b> — ${esc(t.trip_type||'—')} <span class="muted small">(${fmtDate(t.start_date)} - ${fmtDate(t.end_date)})</span></span>
+      <span class="atime">${tripStatusBadge(t.trip_status)}</span>
+    </div>`).join('') : `<div class="empty-row">لا توجد رحلات بحالة "طلب" متاحة حاليًا لإضافة انتداب لها.</div>`;
+  const body = `<div class="muted small mb-8">تظهر هنا فقط الرحلات التي لم يُعتمد تكليفها بعد.</div><div class="card">${rows}</div>`;
+  openModalHTML(modalShell('pickTripModal','اختر رحلة لإضافة انتداب', body, true, ''));
+};
 Modals.addParticipant = function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
   const fedUsers = DB.users.filter(x=>x.federation_id===t.federation_number && x.user_status==='مفتوح');
@@ -869,7 +1117,12 @@ Modals.renderAddParticipantBody = function(){
   const selectedUser = userById(d.user_id);
   const resolvedType = selectedUser ? selectedUser.user_type : null;
   const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
-  const total = Number(d.ticket_price||0) + Number(d.amount_delegations||0);
+  const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
+  const accommodation = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
+  const dailyAllowance = resolvedType ? computeDailyAllowance(resolvedType, t.entity, days, transport, accommodation) : 0;
+  const carEligible = t.entity==='المملكة';
+  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? Number(d.ticket_price||0)*0.75 : Number(d.ticket_price||0);
+  const total = effectiveTicketCost + dailyAllowance;
 
   /* مطابق لتفاصيل الرحلة = نعم → إخفاء تواريخ/أيام/نقل/سكن كليًا (تُنسخ آليًا من الرحلة عند الحفظ) */
   const matchBlock = d.is_linked_to_trip ? '' : `
@@ -893,9 +1146,9 @@ Modals.renderAddParticipantBody = function(){
     ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="number" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="Modals.updateParticipantField('hours_count',this.value)"></div>`
     : '';
 
-  /* تعويض السفر بالسيارة — يظهر فقط إذا كانت وجهة الرحلة "المملكة" */
-  const carBlock = t.entity==='المملكة'
-    ? `<div class="field"><label>تعويض مقابل التذكرة بسبب السفر بالسيارة؟ <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('is_car_traveler',this.value==='true')">
+  /* تعويض السفر بالسيارة — يظهر فقط إذا كانت وجهة الرحلة "المملكة"؛ يُحسب 75% من سعر التذكرة المدخل */
+  const carBlock = carEligible
+    ? `<div class="field"><label>تعويض مقابل التذكرة بسبب السفر بالسيارة؟ <span class="muted">— إلزامي، يُحتسب 75% من سعر التذكرة</span></label><select onchange="Modals.updateParticipantField('is_car_traveler',this.value==='true')">
         <option value="false" ${!d.is_car_traveler?'selected':''}>لا</option><option value="true" ${d.is_car_traveler?'selected':''}>نعم</option></select></div>`
     : '';
 
@@ -914,8 +1167,8 @@ Modals.renderAddParticipantBody = function(){
       ${hoursBlock}
       ${ticketBlock}
       ${carBlock}
-      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي</span></label><input type="number" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateParticipantAmount('ticket_price',this.value)"></div>
-      <div class="field"><label>بدل الانتداب <span class="muted">— إلزامي</span></label><input type="number" min="0" step="0.01" value="${d.amount_delegations}" oninput="Modals.updateParticipantAmount('amount_delegations',this.value)"></div>
+      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي${carEligible&&d.is_car_traveler?' — يُحتسب 75% منه فقط':''}</span></label><input type="number" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateParticipantAmount(this.value)"></div>
+      <div class="field"><label>بدل الانتداب اليومي <span class="muted">— محسوب تلقائيًا حسب الجدول الرسمي</span></label><input type="text" value="${money(dailyAllowance)}" disabled></div>
       ${justificationBlock}
       <div class="field full"><label>مرفق (تذكرة/إثبات) <span class="muted">— إلزامي</span></label><input type="file" id="dgFile" accept="image/*,.pdf"></div>
     </div>
@@ -941,11 +1194,10 @@ Modals.updateParticipantField = function(key,val){
   const body = document.getElementById('addParticipantModalBody');
   if(body) body.innerHTML = Modals.renderAddParticipantBody();
 };
-Modals.updateParticipantAmount = function(key,val){
-  ParticipantDraft[key] = val;
-  const total = Number(ParticipantDraft.ticket_price||0) + Number(ParticipantDraft.amount_delegations||0);
-  const el = document.getElementById('dgTotalAmount');
-  if(el) el.textContent = money(total);
+Modals.updateParticipantAmount = function(val){
+  ParticipantDraft.ticket_price = val;
+  const body = document.getElementById('addParticipantModalBody');
+  if(body) body.innerHTML = Modals.renderAddParticipantBody();
 };
 Actions.saveParticipant = async function(){
   const d = ParticipantDraft;
@@ -964,17 +1216,18 @@ Actions.saveParticipant = async function(){
   }
   if(resolvedType==='مدير تنفيذي' && !d.hours_count){ toast('أدخل عدد ساعات الرحلة','danger'); return; }
   if(d.ticket_price===''||d.ticket_price===null||d.ticket_price===undefined||Number(d.ticket_price)<0){ toast('أدخل سعر التذكرة','danger'); return; }
-  if(d.amount_delegations===''||d.amount_delegations===null||d.amount_delegations===undefined||Number(d.amount_delegations)<0){ toast('أدخل بدل الانتداب','danger'); return; }
   const fileInput0 = document.getElementById('dgFile');
   if(!fileInput0 || !fileInput0.files[0]){ toast('المرفق إلزامي','danger'); return; }
   const ticketPrice = Number(d.ticket_price||0);
-  const amount = Number(d.amount_delegations||0);
   const startDate = d.is_linked_to_trip ? t.start_date : (d.start_date||null);
   const endDate = d.is_linked_to_trip ? t.end_date : (d.end_date||null);
   const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
   const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
   const accom = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
   const isCarEligible = t.entity==='المملكة';
+  const isCar = isCarEligible ? !!d.is_car_traveler : false;
+  const effectiveTicketCost = isCar ? ticketPrice*0.75 : ticketPrice;
+  const amount = computeDailyAllowance(resolvedType, t.entity, days, transport, accom);
   let filePath = null;
   const up = await apiUpload(fileInput0.files[0], 'delegations');
   if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
@@ -985,8 +1238,8 @@ Actions.saveParticipant = async function(){
     delegation_days_count: days, start_date:startDate, end_date:endDate,
     is_transportation_available: transport, is_accommodation_available: accom,
     achieved_goal:null, hours_count: d.hours_count?Number(d.hours_count):null,
-    ticket_type: d.ticket_type, is_car_traveler: isCarEligible ? !!d.is_car_traveler : false,
-    ticket_price: ticketPrice, total_amount: ticketPrice+amount, file: filePath,
+    ticket_type: d.ticket_type, is_car_traveler: isCar,
+    ticket_price: ticketPrice, total_amount: effectiveTicketCost+amount, file: filePath,
     created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
   };
   if(d.mode==='draft'){
@@ -1024,17 +1277,28 @@ Modals.viewParticipant = function(delegationId){
 };
 Actions.approveParticipant = async function(delegationId){
   const u = Session.user;
-  if(!Perm.canApproveParticipant(u)){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  const p = DB.delegations.find(x=>x.delegation_id===delegationId);
+  if(!p || !Perm.canApproveParticipantRecord(u,p)){ toast('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)','danger'); return; }
   const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
   if(!saved) return;
   toast('تم اعتماد المشارك','success'); App.render();
 };
 Actions.rejectParticipant = async function(delegationId){
   const u = Session.user;
-  if(!Perm.canApproveParticipant(u)){ toast('لا تملك صلاحية الرفض','danger'); return; }
+  const p = DB.delegations.find(x=>x.delegation_id===delegationId);
+  if(!p || !Perm.canApproveParticipantRecord(u,p)){ toast('لا تملك صلاحية الرفض','danger'); return; }
   const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'مرفوض' });
   if(!saved) return;
   toast('تم رفض المشارك','success'); App.render();
+};
+Actions.deleteParticipant = async function(delegationId, tripId){
+  const u = Session.user;
+  const t = DB.trips.find(x=>x.trip_id===tripId);
+  if(!Perm.canManageParticipants(u,t)){ toast('لا تملك صلاحية حذف المشاركين','danger'); return; }
+  if(!confirm('هل أنت متأكد من حذف هذا المشارك نهائيًا؟')) return;
+  const ok = await dbDelete('delegations','delegation_id',delegationId);
+  if(!ok) return;
+  toast('تم حذف المشارك','success'); App.render();
 };
 
 /* ============================= Other expenses ============================= */
@@ -1094,14 +1358,16 @@ Views.tickets = function(){
   const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
   let list = DB.delegations.filter(d=>tripIds.has(d.trip_id)).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
   const sumAmt = list.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const addBtn = Perm.canRequestTrip(u) ? `<button class="btn btn-primary" onclick="Modals.pickTripForTicket()">+ انتداب جديد</button>` : '';
   const stats = `<div class="stats-grid">
     <div class="stat-card accent-teal"><div class="lbl">عدد التذاكر/المشاركات</div><div class="val num">${list.length}</div></div>
     <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ</div><div class="val num">${money(sumAmt)}</div></div>
   </div>`;
   const rows = list.length ? list.map(d=>{
     const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+    const notMatchBadge = !d.is_linked_to_trip ? `<span class="badge badge-warning">⚠ غير مطابق</span>` : '';
     return `<tr class="clickable-row" onclick="App.go('tripDetail',{id:'${d.trip_id}'})">
-      <td><b>${esc(userLabel(d.user_id))}</b><div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
+      <td><b>${esc(userLabel(d.user_id))}</b> ${notMatchBadge}<div class="muted small">${esc(t?t.trip_name_ar:'—')}</div></td>
       <td>${esc(d.ticket_type||'—')}</td>
       <td class="num">${money(d.ticket_price)}</td>
       <td class="num">${money(d.total_amount)}</td>
@@ -1110,7 +1376,7 @@ Views.tickets = function(){
     </tr>`;
   }).join('') : `<tr><td colspan="6"><div class="empty-row">لا توجد تذاكر بعد</div></td></tr>`;
   return `
-    <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div></div>
+    <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div>${addBtn}</div>
     ${stats}
     <div class="tbl-wrap mt-16"><table class="tbl"><thead><tr><th>المشارك / الرحلة</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
@@ -1250,11 +1516,19 @@ Views.userDetail = function(userId){
   const canSee = Perm.isAuditor(u) || target.federation_id===u.federation_id;
   if(!canSee) return `<div class="card card-pad">لا تملك صلاحية عرض بيانات هذا المستخدم.</div>`;
   const fed = federationById(target.federation_id);
-  const trips = DB.trips.filter(t=>t.created_by===userId);
-  const rows = trips.length ? trips.map(t=>`
-    <tr class="clickable-row" onclick="App.go('tripDetail',{id:'${t.trip_id}'})">
-      <td><b>${esc(t.trip_name_ar||'—')}</b></td><td>${tripStatusBadge(t.trip_status)}</td><td>${fmtDate(t.start_date)}</td><td>${fmtDate(t.created_at)}</td>
-    </tr>`).join('') : `<tr><td colspan="4"><div class="empty-row">لا توجد رحلات لهذا المستخدم</div></td></tr>`;
+  const travels = DB.delegations.filter(d=>d.user_id===userId).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
+  const approvedTravels = travels.filter(d=>d.delegations_status==='معتمد');
+  const totalAmount = approvedTravels.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const rows = travels.length ? travels.map(d=>{
+    const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+    const notMatchBadge = !d.is_linked_to_trip ? `<span class="badge badge-warning">⚠ غير مطابق</span>` : '';
+    return `<tr class="clickable-row" onclick="App.go('tripDetail',{id:'${d.trip_id}'})">
+      <td><b>${esc(t?t.trip_name_ar:'—')}</b> ${notMatchBadge}</td>
+      <td>${fmtDate(d.start_date)}</td><td>${fmtDate(d.end_date)}</td>
+      <td class="num">${money(d.total_amount)}</td>
+      <td>${delegationStatusBadge(d.delegations_status)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5"><div class="empty-row">لم يسافر هذا المستخدم في أي انتداب بعد</div></td></tr>`;
   return `
     <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
     <div class="card card-pad mt-8">
@@ -1270,8 +1544,12 @@ Views.userDetail = function(userId){
         <div><div class="kv-lbl">تاريخ الانضمام</div><div class="kv-val">${fmtDate(target.created_at)}</div></div>
       </div>
     </div>
-    <h3 class="block-title mt-24">الرحلات المقدَّمة من هذا المستخدم</h3>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>الرحلة</th><th>الحالة</th><th>تاريخ البداية</th><th>تاريخ الطلب</th></tr></thead>
+    <div class="stats-grid mt-16">
+      <div class="stat-card accent-teal"><div class="lbl">عدد مرات السفر</div><div class="val num">${travels.length}</div></div>
+      <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ (المعتمدة)</div><div class="val num">${money(totalAmount)}</div></div>
+    </div>
+    <h3 class="block-title mt-24">سفريات هذا المستخدم</h3>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>الرحلة</th><th>تاريخ البداية</th><th>تاريخ النهاية</th><th>المبلغ</th><th>الحالة</th></tr></thead>
     <tbody>${rows}</tbody></table></div>
   `;
 };
