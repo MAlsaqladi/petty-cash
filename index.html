@@ -1322,6 +1322,9 @@ Views.custodyDetail = function(id){
   const actionBtns = [];
   actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Modals.viewAudit('custody','${c.custody_id}')">ℹ التفاصيل</button>`);
   actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Actions.printCustody('${c.custody_id}')">🖨 طباعة</button>`);
+  if(c.custody_status==='مغلقة'){
+    actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Actions.printCustodyClosureEntry('${c.custody_id}')">🖨 قيد إقفال العهدة</button>`);
+  }
   if(canEditReq){
     actionBtns.push(`<button class="btn btn-outline btn-sm" onclick="Modals.editCustody('${c.custody_id}')">✎ تعديل الطلب</button>`);
   }
@@ -2561,6 +2564,92 @@ Actions.printTransferEntry = function(transferId){
     document.body.appendChild(area);
   }
   area.innerHTML = buildTransferEntryPrintHTML(transferId);
+  setTimeout(()=>window.print(), 80);
+};
+
+/* ============================= طباعة قيد إقفال العهدة ============================= */
+function buildCustodyClosureEntryPrintHTML(custodyId){
+  const c = DB.custodies.find(x=>x.custody_id===custodyId);
+  if(!c) return '';
+  const fed = federationById(c.federation_id);
+  const holder = userById(c.received_by_user_id);
+  const holderName = holder ? holder.employee_name_ar : '—';
+  const approvedExpenses = DB.custody_closures.filter(e=>e.custody_id===custodyId && e.disbursement_status==='معتمد');
+
+  // تجميع المصاريف حسب (مركز التكلفة + نوع المصروف) بدون تكرار، مع جمع المبالغ
+  const groups = {};
+  approvedExpenses.forEach(e=>{
+    const key = (e.cost_center_id||'—') + '||' + (e.expense_type_id||'—');
+    if(!groups[key]) groups[key] = { cost_center_id: e.cost_center_id, expense_type_id: e.expense_type_id, amount: 0 };
+    groups[key].amount += Number(e.amount||0);
+  });
+  const groupRows = Object.values(groups);
+  const totalAmount = groupRows.reduce((s,g)=>s+g.amount,0);
+
+  const debitRows = groupRows.map(g=>`
+    <tr><td>${esc(costCenterLabel(g.cost_center_id))}</td><td>${esc(expenseTypeLabel(g.expense_type_id))}</td><td>${money(g.amount)}</td><td>—</td></tr>
+  `).join('');
+  const creditRow = `<tr><td colspan="2"><b>إلى / ${esc(holderName)}</b></td><td>—</td><td>${money(totalAmount)}</td></tr>`;
+
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
+            <div class="print-sys-name">نظام إدارة العهد النقدية</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>رقم مرجعي: ${esc(c.custody_id)}</div>
+        </div>
+      </div>
+      <h1 class="print-title">قيد إقفال العهدة</h1>
+      <div class="print-subtitle">${esc(c.description_ar||'—')} — صاحب العهدة: ${esc(holderName)}</div>
+    </div>
+
+    <table class="print-kv">
+      <tr><td class="lbl">صاحب العهدة</td><td class="val">${esc(holderName)}</td><td class="lbl">تاريخ الإقفال</td><td class="val">${fmtDate(c.Closing_date)}</td></tr>
+    </table>
+
+    <div class="print-section-title">📒 تفاصيل القيد (مجمّعة حسب مركز التكلفة ونوع المصروف)</div>
+    <table class="print-tbl">
+      <thead><tr><th>مركز التكلفة</th><th>نوع المصروف</th><th>مدين</th><th>دائن</th></tr></thead>
+      <tbody>
+        ${debitRows || `<tr><td colspan="4"><div class="print-empty">لا توجد مصاريف فعلية معتمدة</div></td></tr>`}
+        ${groupRows.length ? creditRow : ''}
+      </tbody>
+      <tfoot><tr><td colspan="2">الإجمالي</td><td>${money(totalAmount)}</td><td>${money(totalAmount)}</td></tr></tfoot>
+    </table>
+
+    <div class="print-signoff">
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">إعداد</div>
+        <div class="print-sign-line"><div class="print-sign-name">—</div><div class="print-sign-date"></div></div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">مراجعة</div>
+        <div class="print-sign-line"><div class="print-sign-name">—</div><div class="print-sign-date"></div></div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">اعتماد</div>
+        <div class="print-sign-line"><div class="print-sign-name">${esc(userLabel(c.closure_approved_by))}</div><div class="print-sign-date">${fmtDate(c.closure_approval_date)}</div></div>
+      </div>
+    </div>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية</div>
+  </div>`;
+}
+Actions.printCustodyClosureEntry = function(custodyId){
+  let area = document.getElementById('printArea');
+  if(!area){
+    area = document.createElement('div');
+    area.id = 'printArea';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = buildCustodyClosureEntryPrintHTML(custodyId);
   setTimeout(()=>window.print(), 80);
 };
 Views.users = function(){
