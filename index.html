@@ -1144,7 +1144,7 @@ Views.transfersList = function(){
         <td>${esc(t.currency||'SAR')}</td>
         <td>${esc(userLabel(t.created_by))}</td>
         <td>${fmtDateTime(t.created_at)}</td>
-        <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
+        <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${t.custody_id}','${t.transfer_id}')">تفاصيل</button><button class="btn btn-outline btn-sm" onclick="Actions.printTransferEntry('${t.transfer_id}')">🖨 القيد المحاسبي</button></div></td>
       </tr>`;
     }).join('') : `<tr><td colspan="7"><div class="empty-row">لا توجد تحويلات</div></td></tr>`;
   }
@@ -1424,7 +1424,7 @@ Views.custodyDetail = function(id){
       <td>${esc(t.statement||'—')}</td>
       <td class="num">${money(t.amount)}</td>
       <td>${esc(userLabel(t.created_by))}</td>
-      <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${c.custody_id}','${t.transfer_id}')">تفاصيل</button></div></td>
+      <td><div class="flex gap-8 wrap">${attachBtnHTML(t.file)}<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('transfer','${c.custody_id}','${t.transfer_id}')">تفاصيل</button><button class="btn btn-outline btn-sm" onclick="Actions.printTransferEntry('${t.transfer_id}')">🖨 القيد</button></div></td>
     </tr>`).join('') : `<tr><td colspan="5"><div class="empty-row">لا توجد تحويلات بعد</div></td></tr>`;
   const transfersHTML = `
   <div class="card mt-24">
@@ -2486,6 +2486,81 @@ Actions.printCustody = async function(custodyId){
     document.body.appendChild(area);
   }
   area.innerHTML = buildCustodyPrintHTML(custodyId, fileUrlMap);
+  setTimeout(()=>window.print(), 80);
+};
+
+/* ============================= طباعة القيد المحاسبي للتحويل ============================= */
+function buildTransferEntryPrintHTML(transferId){
+  const t = DB.custody_transfers.find(x=>x.transfer_id===transferId);
+  if(!t) return '';
+  const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
+  const fed = federationById(t.federation_id || (c?c.federation_id:null));
+  const holder = userById(c?c.received_by_user_id:null);
+  const holderName = holder ? holder.employee_name_ar : '—';
+
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
+            <div class="print-sys-name">نظام إدارة العهد النقدية</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>رقم مرجعي: ${esc(t.transfer_id)}</div>
+        </div>
+      </div>
+      <h1 class="print-title">سند قيد محاسبي</h1>
+      <div class="print-subtitle">تحويل إلى عهدة: ${esc(c?c.description_ar:'—')}</div>
+    </div>
+
+    <table class="print-kv">
+      <tr><td class="lbl">صاحب العهدة (المستلم)</td><td class="val">${esc(holderName)}</td><td class="lbl">تاريخ القيد</td><td class="val">${fmtDate(t.created_at)}</td></tr>
+      <tr><td class="lbl">البيان</td><td class="val" colspan="3">${esc(t.statement||'تحويل عهدة نقدية')}</td></tr>
+    </table>
+
+    <div class="print-section-title">📒 تفاصيل القيد</div>
+    <table class="print-tbl">
+      <thead><tr><th>الحساب</th><th>مدين</th><th>دائن</th></tr></thead>
+      <tbody>
+        <tr><td>${esc(holderName)} — أصول متداولة (موظفين)</td><td>${money(t.amount)}</td><td>—</td></tr>
+        <tr><td>البنك السعودي للاستثمار</td><td>—</td><td>${money(t.amount)}</td></tr>
+      </tbody>
+      <tfoot><tr><td>الإجمالي</td><td>${money(t.amount)}</td><td>${money(t.amount)}</td></tr></tfoot>
+    </table>
+
+    <div class="alert alert-info mt-16" style="margin-top:16px;">يرجى تسجيل القيد كالتالي إذا كان الصرف من البنك مباشرة.</div>
+    <div class="alert alert-warning" style="margin-top:8px;">في حال عدم وجود حساب مستقل باسم صاحب العهدة ضمن دفاتر الحسابات، يجب إضافته أولًا تحت: <b>الأصول المتداولة ← الموظفين</b>، قبل تسجيل هذا القيد.</div>
+
+    <div class="print-signoff">
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">إعداد</div>
+        <div class="print-sign-line"><div class="print-sign-name">${esc(userLabel(t.created_by))}</div><div class="print-sign-date">${fmtDate(t.created_at)}</div></div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">مراجعة</div>
+        <div class="print-sign-line"><div class="print-sign-name">—</div><div class="print-sign-date"></div></div>
+      </div>
+      <div class="print-sign-box">
+        <div class="print-sign-lbl">اعتماد</div>
+        <div class="print-sign-line"><div class="print-sign-name">—</div><div class="print-sign-date"></div></div>
+      </div>
+    </div>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية</div>
+  </div>`;
+}
+Actions.printTransferEntry = function(transferId){
+  let area = document.getElementById('printArea');
+  if(!area){
+    area = document.createElement('div');
+    area.id = 'printArea';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = buildTransferEntryPrintHTML(transferId);
   setTimeout(()=>window.print(), 80);
 };
 Views.users = function(){
