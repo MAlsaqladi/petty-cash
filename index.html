@@ -42,15 +42,18 @@
       <button class="sb-logout" onclick="App.logout()">تسجيل الخروج</button>
     </div>
   </aside>
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="document.getElementById('sidebar').classList.remove('open')"></div>
   <div class="main">
     <div class="topbar">
-      <div>
-        <h1 id="topTitle">لوحة العهد النقدية</h1>
-        <div class="crumb" id="topCrumb">—</div>
+      <div class="flex gap-8 center">
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('sidebar').classList.toggle('open')" id="burgerBtn" aria-label="فتح/إغلاق القائمة الجانبية">☰</button>
+        <div>
+          <h1 id="topTitle">لوحة العهد النقدية</h1>
+          <div class="crumb" id="topCrumb">—</div>
+        </div>
       </div>
       <div class="flex gap-8 center">
         <button class="btn btn-outline btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
-        <button class="btn btn-outline btn-sm" onclick="document.getElementById('sidebar').classList.toggle('open')" style="display:none" id="burgerBtn">☰</button>
       </div>
     </div>
     <div id="view" class="paper-bg"></div>
@@ -673,6 +676,8 @@ App.go = function(view, params){
   document.getElementById('topTitle').textContent = meta.title;
   document.getElementById('topCrumb').textContent = meta.crumb;
   window.scrollTo(0,0);
+  // أغلق القائمة الجانبية تلقائيًا بعد التنقل عند العرض على الجوال
+  document.getElementById('sidebar').classList.remove('open');
   App.render();
 };
 
@@ -3286,6 +3291,10 @@ Actions.printUserProfile = function(userId){
 
 document.addEventListener('DOMContentLoaded', function(){
   bootApp();
+});
+
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape') document.getElementById('sidebar').classList.remove('open');
 });
 
 </script>
