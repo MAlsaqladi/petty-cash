@@ -365,7 +365,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 .print-header{ border-bottom:2.5px solid #14261B; padding-bottom:10px; margin-bottom:16px; }
 .print-header-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
 .print-org{ display:flex; align-items:center; gap:10px; }
-.print-org img{ width:40px; height:40px; object-fit:contain; }
+.print-org img{ width:40px; height:40px; object-fit:contain; background:#14261B; border-radius:8px; padding:5px; box-sizing:border-box; }
 .print-org-name{ font-weight:800; font-size:14px; }
 .print-sys-name{ font-size:11px; color:#5C6E62; font-weight:700; }
 .print-meta{ text-align:left; font-size:10.5px; color:#5C6E62; line-height:1.7; }
