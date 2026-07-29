@@ -1122,7 +1122,7 @@ Views.custodyDetail = function(id){
   const sameFed = c.federation_id===u.federation_id;
   const canApproveReq = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequestFor(u,c) && sameFed;
   const canTransferNow = c.custody_status==='مفتوحة' && f.pendingTransfer>0 && Perm.canTransfer(u) && sameFed && u.user_id!==c.request_approved_by;
-  const canCloseNow = c.custody_status==='مفتوحة' && f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0 && f.pendingTransfer===0 && Perm.canCloseCustodyFor(u,c) && sameFed;
+  const canCloseNow = c.custody_status==='مفتوحة' && f.remainingBalance===0 && f.pendingExpenseCount===0 && f.pendingBudgetLines.length===0 && f.approvedExpenses>0 && f.pendingTransfer===0 && Perm.canCloseCustodyFor(u,c) && sameFed;
   const canEditReq = Perm.canEditCustody(u,c);
   const waiting = custodyWaitingLabel(c);
 
@@ -2034,6 +2034,7 @@ Actions.closeCustody = async function(custodyId){
   const f = custodyFinancials(c);
   if(!Perm.canCloseCustodyFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إقفال العهدة','danger'); return; }
   if(!(f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0)){ toast('لا يمكن إقفال العهدة قبل تسوية الرصيد بالكامل','danger'); return; }
+  if(f.pendingBudgetLines.length>0){ toast('لا يمكن الإقفال قبل اعتماد أو إلغاء كل بنود المصاريف التقديرية المعلّقة','danger'); return; }
   if(!confirm('هل تريد تأكيد إقفال هذه العهدة نهائيًا؟')) return;
   const saved = await dbUpdate('custodies','custody_id',custodyId, {
     custody_status:'مغلقة', Closing_date: nowISO(), closure_approved_by: u.user_id, closure_approval_date: nowISO()
