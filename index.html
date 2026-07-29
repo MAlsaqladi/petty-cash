@@ -919,13 +919,10 @@ function computeCustodyListStats(list){
   const totalBalance = openList.reduce((s,c)=>s+custodyFinancials(c).remainingBalance,0);
   return [
     {label:'إجمالي عدد العهد', value: list.length},
-    {label:'مفتوحة (العدد)', value: openList.length},
-    {label:'مفتوحة (إجمالي المصروف)', value: money(openSpent)},
-    {label:'مغلقة (العدد)', value: closedList.length},
-    {label:'مغلقة (إجمالي المصروف)', value: money(closedSpent)},
+    {label:'مفتوحة', value: `${openList.length} — ${money(openSpent)}`},
+    {label:'مغلقة', value: `${closedList.length} — ${money(closedSpent)}`},
     {label:'بانتظار الاعتماد (تنتظر الصرف)', value: pendingList.length},
-    {label:'مرفوضة (العدد)', value: rejectedList.length},
-    {label:'مرفوضة (الإجمالي)', value: money(rejectedTotal)},
+    {label:'مرفوضة', value: `${rejectedList.length} — ${money(rejectedTotal)}`},
     {label:'إجمالي أرصدة العهد المفتوحة', value: money(totalBalance)},
   ];
 }
@@ -1111,12 +1108,9 @@ function computeBudgetsListStats(allList){
   return [
     {label:'إجمالي البنود', value: allList.length},
     {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
-    {label:'معتمد (العدد)', value: approved.length},
-    {label:'معتمد (المبلغ)', value: money(approvedAmt)},
-    {label:'غير معتمد (العدد)', value: pending.length},
-    {label:'غير معتمد (المبلغ)', value: money(pendingAmt)},
-    {label:'ملغى (العدد)', value: cancelled.length},
-    {label:'ملغى (المبلغ)', value: money(cancelledAmt)},
+    {label:'معتمد', value: `${approved.length} — ${money(approvedAmt)}`},
+    {label:'غير معتمد', value: `${pending.length} — ${money(pendingAmt)}`},
+    {label:'ملغى', value: `${cancelled.length} — ${money(cancelledAmt)}`},
   ];
 }
 Views.printBudgetsList = function(){
@@ -1196,8 +1190,7 @@ function computeTransfersListStats(u, transferList){
     {label:'إجمالي عدد التحويلات', value: transferList.length},
     {label:'إجمالي المبلغ (محوّل + بانتظار التحويل)', value: money(totalTransferred+pendingTransferSum)},
     {label:'إجمالي ما تم تحويله', value: money(totalTransferred)},
-    {label:'إجمالي المتبقي للتحويل', value: money(pendingTransferSum)},
-    {label:'عدد العهد بانتظار التحويل', value: pendingTransferCount},
+    {label:'المتبقي للتحويل', value: `${pendingTransferCount} عهدة — ${money(pendingTransferSum)}`},
   ];
 }
 Views.exportTransfersList = function(){
@@ -1285,12 +1278,9 @@ function computeExpensesListStats(allList){
   return [
     {label:'إجمالي المصاريف', value: allList.length},
     {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
-    {label:'معتمد (العدد)', value: approved.length},
-    {label:'معتمد (المبلغ)', value: money(approvedAmt)},
-    {label:'غير معتمد (العدد)', value: pending.length},
-    {label:'غير معتمد (المبلغ)', value: money(pendingAmt)},
-    {label:'ملغى (العدد)', value: cancelled.length},
-    {label:'ملغى (المبلغ)', value: money(cancelledAmt)},
+    {label:'معتمد', value: `${approved.length} — ${money(approvedAmt)}`},
+    {label:'غير معتمد', value: `${pending.length} — ${money(pendingAmt)}`},
+    {label:'ملغى', value: `${cancelled.length} — ${money(cancelledAmt)}`},
   ];
 }
 Views.printExpensesList = function(){
@@ -2566,8 +2556,7 @@ function computeUsersListStats(list){
   USER_STATUSES.forEach(st=>{
     const group = list.filter(x=>x.user_status===st);
     if(!group.length) return;
-    stats.push({label:`${st} (العدد)`, value: group.length});
-    stats.push({label:`${st} (الرصيد)`, value: money(group.reduce((s,x)=>s+userOpenBalance(x.user_id),0))});
+    stats.push({label: st, value: `${group.length} — ${money(group.reduce((s,x)=>s+userOpenBalance(x.user_id),0))}`});
   });
   return stats;
 }
