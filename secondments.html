@@ -362,13 +362,15 @@ function exportWorkbook(){
 /* =========================================================================
    طباعة/تصدير أي قائمة (جدول) معروضة في الواجهة — تُستخدم بأعلى كل صفحة قوائم
    ========================================================================= */
-function buildListPrintHTML(title, subtitle, headers, rows){
+function buildListPrintHTML(title, subtitle, headers, rows, stats){
   const u = Session.user;
   const fed = federationById(u ? u.federation_id : null);
   const theadHTML = headers.map(h=>`<th>${esc(h)}</th>`).join('');
   const rowsHTML = rows.length
     ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
+  const statsHTML = (stats && stats.length) ? `<div class="print-balance-strip">${stats.map(s=>`
+    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div></div>`).join('')}</div>` : '';
   return `
   <div class="print-doc">
     <div class="print-header">
@@ -388,6 +390,7 @@ function buildListPrintHTML(title, subtitle, headers, rows){
       <h1 class="print-title">${esc(title)}</h1>
       ${subtitle ? `<div class="print-subtitle">${esc(subtitle)}</div>` : ''}
     </div>
+    ${statsHTML}
     <table class="print-tbl">
       <thead><tr>${theadHTML}</tr></thead>
       <tbody>${rowsHTML}</tbody>
@@ -395,10 +398,10 @@ function buildListPrintHTML(title, subtitle, headers, rows){
     <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة الانتدابات وتذاكر السفر</div>
   </div>`;
 }
-function printListReport(title, subtitle, headers, rows){
+function printListReport(title, subtitle, headers, rows, stats){
   let area = document.getElementById('printArea');
   if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
-  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows);
+  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows, stats);
   setTimeout(()=>window.print(), 80);
 }
 function exportListToExcel(filename, headers, rows){
@@ -682,7 +685,20 @@ Views.printTripsList = function(){
   let list = visibleTrips(u);
   if(TripFilter!=='all') list = list.filter(t=>t.trip_status===TripFilter);
   const rows = list.map(t=>[t.trip_name_ar||'—', t.trip_type||'—', t.entity||'—', TRIP_STATUS_LABELS[t.trip_status]||t.trip_status, fmtDate(t.start_date), fmtDate(t.end_date), userLabel(t.created_by), fmtDate(t.created_at)]);
-  printListReport('قائمة الرحلات', TripFilter!=='all'?('الحالة: '+(TRIP_STATUS_LABELS[TripFilter]||TripFilter)):'', ['الرحلة','النوع','الجهة','الحالة','تاريخ البداية','تاريخ النهاية','مقدّم الطلب','تاريخ الطلب'], rows);
+  const pendingReq = list.filter(t=>t.trip_status==='طلب').length;
+  const inDisbursement = list.filter(t=>t.trip_status==='قيد الصرف').length;
+  const closed = list.filter(t=>t.trip_status==='مغلقة').length;
+  const rejected = list.filter(t=>t.trip_status==='مرفوضة').length;
+  const approvedAmt = list.reduce((s,t)=>s+tripFinancials(t).totalApproved,0);
+  const stats = [
+    {label:'إجمالي الرحلات', value: list.length},
+    {label:'بانتظار الاعتماد', value: pendingReq},
+    {label:'قيد الصرف', value: inDisbursement},
+    {label:'مغلقة', value: closed},
+    {label:'مرفوضة', value: rejected},
+    {label:'المصروف المعتمد', value: money(approvedAmt)},
+  ];
+  printListReport('قائمة الرحلات', TripFilter!=='all'?('الحالة: '+(TRIP_STATUS_LABELS[TripFilter]||TripFilter)):'', ['الرحلة','النوع','الجهة','الحالة','تاريخ البداية','تاريخ النهاية','مقدّم الطلب','تاريخ الطلب'], rows, stats);
 };
 Views.exportTripsList = function(){
   const u = Session.user;
@@ -1708,8 +1724,14 @@ function _ticketsListRows(){
   });
 }
 Views.printTicketsList = function(){
-  const rows = _ticketsListRows().map(r=>[r[0],r[1],r[2],money(r[3]),money(r[4]),money(r[5]),r[6],r[7]?fmtDate(r[7]):'']);
-  printListReport('قائمة تذاكر السفر', '', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], rows);
+  const raw = _ticketsListRows();
+  const rows = raw.map(r=>[r[0],r[1],r[2],money(r[3]),money(r[4]),money(r[5]),r[6],r[7]?fmtDate(r[7]):'']);
+  const sumAmt = raw.filter(r=>r[6]!=='مرفوض').reduce((s,r)=>s+Number(r[5]||0),0);
+  const stats = [
+    {label:'عدد التذاكر/المشاركات', value: raw.length},
+    {label:'إجمالي المبالغ (باستثناء المرفوض)', value: money(sumAmt)},
+  ];
+  printListReport('قائمة تذاكر السفر', '', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], rows, stats);
 };
 Views.exportTicketsList = function(){
   exportListToExcel('tickets-list', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], _ticketsListRows());
@@ -1777,8 +1799,14 @@ function _otherExpensesListRows(){
   });
 }
 Views.printOtherExpensesList = function(){
-  const rows = _otherExpensesListRows().map(r=>[r[0],r[1],r[2],money(r[3]),r[4],r[5]?fmtDate(r[5]):'']);
-  printListReport('قائمة المصاريف الأخرى', '', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], rows);
+  const raw = _otherExpensesListRows();
+  const rows = raw.map(r=>[r[0],r[1],r[2],money(r[3]),r[4],r[5]?fmtDate(r[5]):'']);
+  const sumAmt = raw.filter(r=>r[4]!=='ملغى').reduce((s,r)=>s+Number(r[3]||0),0);
+  const stats = [
+    {label:'عدد المصاريف', value: raw.length},
+    {label:'إجمالي المبالغ (باستثناء المرفوضة)', value: money(sumAmt)},
+  ];
+  printListReport('قائمة المصاريف الأخرى', '', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], rows, stats);
 };
 Views.exportOtherExpensesList = function(){
   exportListToExcel('other-expenses-list', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], _otherExpensesListRows());
@@ -1836,7 +1864,16 @@ Views.printUsersList = function(){
   const u = Session.user;
   const list = visibleUsers(u);
   const rows = list.map(x=>{ const s=userTravelStats(x.user_id); return [x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', s.count, money(s.amount), x.user_status||'—']; });
-  printListReport('قائمة المستخدمين', '', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows);
+  const pendingCount = list.filter(x=>x.user_status==='تحت المعالجة').length;
+  const totalTravels = list.reduce((s,x)=>s+userTravelStats(x.user_id).count,0);
+  const totalAmt = list.reduce((s,x)=>s+userTravelStats(x.user_id).amount,0);
+  const stats = [
+    {label:'إجمالي المستخدمين', value: list.length},
+    {label:'بانتظار الاعتماد', value: pendingCount},
+    {label:'إجمالي عدد السفريات', value: totalTravels},
+    {label:'إجمالي المبالغ المعتمدة', value: money(totalAmt)},
+  ];
+  printListReport('قائمة المستخدمين', '', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows, stats);
 };
 Views.exportUsersList = function(){
   const u = Session.user;
