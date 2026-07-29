@@ -418,6 +418,15 @@ function exportListToExcel(filename, headers, rows){
 }
 
 /* ---------------------------- App bootstrap ---------------------------- */
+/* ننتظر جاهزية خطوط الويب (بحد أقصى ثانيتين) لتفادي قفزة التخطيط عند أول رسم للواجهة */
+async function waitForFonts(){
+  try{
+    if(document.fonts && document.fonts.ready){
+      await Promise.race([document.fonts.ready, new Promise(r=>setTimeout(r, 2000))]);
+    }
+  }catch(e){ /* تجاهل — بعض المتصفحات القديمة لا تدعم واجهة document.fonts */ }
+}
+
 async function bootApp(){
   const statusEl = document.getElementById('bootStatus');
   const sessionUser = Auth.readSession();
@@ -433,6 +442,9 @@ async function bootApp(){
     const freshUser = (DB.users||[]).find(x=>x.user_id===sessionUser.user_id);
     if(!freshUser || freshUser.user_status!=='مفتوح'){ Auth.clearSession(); Auth.goToLogin(); return; }
     Session.user = freshUser; Session.view = 'dashboard'; Session.params = {};
+    // ننتظر تحميل خطوط الويب قبل إظهار الواجهة، حتى لا يحدث تغيّر مفاجئ
+    // في التخطيط عند تبديل الخط بعد الظهور (كان يجعل الرئيسية تبدو غير مضبوطة).
+    await waitForFonts();
     document.getElementById('screen-boot').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
     App.renderShell();
