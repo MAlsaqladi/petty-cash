@@ -966,8 +966,15 @@ Views.tripDetail = function(tripId){
     actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Actions.approveTripAssignment('${t.trip_id}')">✔ اعتماد</button>`);
     actionBtns.push(`<button class="btn btn-danger btn-sm" onclick="Actions.rejectTrip('${t.trip_id}')">✕ رفض</button>`);
   }
+  const pendingParticipantsCount = f.participants.filter(p=>p.delegations_status==='غير معتمد').length;
+  const pendingOtherExpCount = f.otherExp.filter(e=>e.expense_status==='غير معتمد').length;
+  const hasPendingItems = pendingParticipantsCount>0 || pendingOtherExpCount>0;
   if(t.trip_status==='قيد الصرف' && Perm.canCloseTrip(u) && sameFed){
-    actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Modals.closeTrip('${t.trip_id}')">🔒 إقفال الرحلة</button>`);
+    if(hasPendingItems){
+      actionBtns.push(`<button class="btn btn-primary btn-sm" disabled title="لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المشاركين والمصاريف الأخرى المعلّقة">🔒 إقفال الرحلة</button>`);
+    } else {
+      actionBtns.push(`<button class="btn btn-primary btn-sm" onclick="Modals.closeTrip('${t.trip_id}')">🔒 إقفال الرحلة</button>`);
+    }
   }
 
   const canAddParticipant = Perm.canManageParticipants(u,t);
@@ -1013,6 +1020,7 @@ Views.tripDetail = function(tripId){
         <div><div class="eyebrow">${esc(fed?fed.federation_name_ar:'—')}</div><h2>${esc(t.trip_name_ar)}</h2><div class="muted small">${esc(t.trip_name_en||'')}</div></div>
         <div class="flex gap-8 wrap">${tripStatusBadge(t.trip_status)}${actionBtns.join('')}</div>
       </div>
+      ${(t.trip_status==='قيد الصرف' && hasPendingItems) ? `<div class="alert alert-warning mt-8">لا يمكن إقفال الرحلة الآن — يوجد ${pendingParticipantsCount?`${pendingParticipantsCount} مشارك`:''}${pendingParticipantsCount&&pendingOtherExpCount?' و':''}${pendingOtherExpCount?`${pendingOtherExpCount} مصروف آخر`:''} بانتظار الاعتماد. يجب اعتمادهم أو رفضهم/حذفهم أولاً.</div>` : ''}
       <div class="kv-grid mt-16">
         <div><div class="kv-lbl">نوع الرحلة</div><div class="kv-val">${esc(t.trip_type||'—')}</div></div>
         <div><div class="kv-lbl">إلى أين</div><div class="kv-val">${esc(t.entity||'—')}</div></div>
@@ -1131,11 +1139,11 @@ Actions.approveTripAssignment = async function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
   const u = Session.user;
   if(!Perm.canApproveTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
-  // منع الاعتماد الذاتي: لو المعتمِد نفسه ضمن المنتدبين، يحيله للجهة الأخرى المخوّلة
-  const isParticipant = tripParticipants(tripId).some(p=>p.user_id===u.user_id);
-  if(isParticipant){
+  // منع الاعتماد الذاتي: لو المعتمِد نفسه ضمن المنتدبين وحالته لسه غير معتمدة، يحيله للجهة الأخرى المخوّلة
+  const ownRecord = tripParticipants(tripId).find(p=>p.user_id===u.user_id);
+  if(ownRecord && ownRecord.delegations_status==='غير معتمد'){
     const other = Perm.isPresident(u) ? 'المدير التنفيذي' : 'رئيس الاتحاد';
-    toast(`أنت موجود ضمن المشتركين بالانتداب، يرجى التواصل مع ${other} للاعتماد`, 'danger');
+    toast(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للاعتماد`, 'danger');
     return;
   }
   const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'قيد الصرف', request_approved_by:u.user_id, request_approval_date:nowISO() });
@@ -1158,10 +1166,10 @@ Actions.rejectTrip = async function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
   const u = Session.user;
   if(!Perm.canApproveTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الرفض','danger'); return; }
-  const isParticipant = tripParticipants(tripId).some(p=>p.user_id===u.user_id);
-  if(isParticipant){
+  const ownRecord = tripParticipants(tripId).find(p=>p.user_id===u.user_id);
+  if(ownRecord && ownRecord.delegations_status==='غير معتمد'){
     const other = Perm.isPresident(u) ? 'المدير التنفيذي' : 'رئيس الاتحاد';
-    toast(`أنت موجود ضمن المشتركين بالانتداب، يرجى التواصل مع ${other} للبت في الطلب`, 'danger');
+    toast(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للبت في الطلب`, 'danger');
     return;
   }
   const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'مرفوضة' });
@@ -1181,6 +1189,9 @@ Actions.closeTrip = async function(tripId){
   const t = DB.trips.find(x=>x.trip_id===tripId);
   const u = Session.user;
   if(!Perm.canCloseTrip(u) || t.federation_number!==u.federation_id){ toast('لا تملك صلاحية الإقفال','danger'); return; }
+  const pendingP = tripParticipants(tripId).filter(p=>p.delegations_status==='غير معتمد').length;
+  const pendingE = tripOtherExpenses(tripId).filter(e=>e.expense_status==='غير معتمد').length;
+  if(pendingP>0 || pendingE>0){ toast('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المشاركين والمصاريف الأخرى المعلّقة','danger'); return; }
   const achieved = document.getElementById('ctAchieved').value.trim();
   if(!achieved){ toast('الرجاء تسجيل الأهداف المحققة قبل الإقفال','danger'); return; }
   const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'مغلقة', achieved_results:achieved, closure_approved_by:u.user_id, closure_approval_date:nowISO() });
@@ -1701,9 +1712,13 @@ Views.users = function(){
   `;
 };
 Modals.addUser = function(){
+  const u = Session.user;
+  const isAud = Perm.isAuditor(u);
   const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
+  const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
     <div class="form-grid">
+      ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="nuNameAr"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="nuNameEn"></div>
       <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
@@ -1719,11 +1734,15 @@ Modals.addUser = function(){
 };
 Actions.saveUser = async function(){
   const u = Session.user;
+  const isAud = Perm.isAuditor(u);
+  const fedInput = document.getElementById('nuFed');
+  const federationId = isAud ? (fedInput ? fedInput.value : '') : u.federation_id;
+  if(isAud && !federationId){ toast('اختر الاتحاد أولاً','danger'); return; }
   const username = document.getElementById('nuUsername').value.trim();
   const password = document.getElementById('nuPassword').value;
   if(!username || !password){ toast('اسم المستخدم وكلمة المرور إلزاميان','danger'); return; }
   const obj = {
-    user_id: uid('usr'), federation_id: u.federation_id, user_status:'تحت المعالجة',
+    user_id: uid('usr'), federation_id: federationId, user_status:'تحت المعالجة',
     employee_name_ar: document.getElementById('nuNameAr').value, employee_name_en: document.getElementById('nuNameEn').value,
     national_id:null, nationality:null, phone: document.getElementById('nuPhone').value, email: document.getElementById('nuEmail').value,
     user_name: username, password: password, user_type: document.getElementById('nuType').value,
