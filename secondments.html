@@ -359,6 +359,55 @@ function exportWorkbook(){
   XLSX.writeFile(wb, 'secondments-backup-' + stamp + '.xlsx');
 }
 
+/* =========================================================================
+   طباعة/تصدير أي قائمة (جدول) معروضة في الواجهة — تُستخدم بأعلى كل صفحة قوائم
+   ========================================================================= */
+function buildListPrintHTML(title, subtitle, headers, rows){
+  const u = Session.user;
+  const fed = federationById(u ? u.federation_id : null);
+  const theadHTML = headers.map(h=>`<th>${esc(h)}</th>`).join('');
+  const rowsHTML = rows.length
+    ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'كل الاتحادات')}</div>
+            <div class="print-sys-name">نظام إدارة الانتدابات وتذاكر السفر</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>عدد السجلات: ${rows.length}</div>
+        </div>
+      </div>
+      <h1 class="print-title">${esc(title)}</h1>
+      ${subtitle ? `<div class="print-subtitle">${esc(subtitle)}</div>` : ''}
+    </div>
+    <table class="print-tbl">
+      <thead><tr>${theadHTML}</tr></thead>
+      <tbody>${rowsHTML}</tbody>
+    </table>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة الانتدابات وتذاكر السفر</div>
+  </div>`;
+}
+function printListReport(title, subtitle, headers, rows){
+  let area = document.getElementById('printArea');
+  if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
+  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows);
+  setTimeout(()=>window.print(), 80);
+}
+function exportListToExcel(filename, headers, rows){
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');
+}
+
 /* ---------------------------- App bootstrap ---------------------------- */
 async function bootApp(){
   const statusEl = document.getElementById('bootStatus');
@@ -611,7 +660,13 @@ Views.trips = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   return `
-    <div class="section-head"><div><div class="eyebrow">الرحلات</div><h2>طلبات الرحلات والانتدابات</h2></div>${addBtn}</div>
+    <div class="section-head"><div><div class="eyebrow">الرحلات</div><h2>طلبات الرحلات والانتدابات</h2></div>
+      <div class="flex gap-8 wrap">
+        <button class="btn btn-outline btn-sm" onclick="Views.printTripsList()">🖨 طباعة القائمة</button>
+        <button class="btn btn-outline btn-sm" onclick="Views.exportTripsList()">⭳ تصدير Excel</button>
+        ${addBtn}
+      </div>
+    </div>
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, t=>t.federation_number, tableFor, items=>{
@@ -622,6 +677,20 @@ Views.trips = function(){
   `;
 };
 Views.setTripFilter = function(k){ TripFilter = k; App.render(); };
+Views.printTripsList = function(){
+  const u = Session.user;
+  let list = visibleTrips(u);
+  if(TripFilter!=='all') list = list.filter(t=>t.trip_status===TripFilter);
+  const rows = list.map(t=>[t.trip_name_ar||'—', t.trip_type||'—', t.entity||'—', TRIP_STATUS_LABELS[t.trip_status]||t.trip_status, fmtDate(t.start_date), fmtDate(t.end_date), userLabel(t.created_by), fmtDate(t.created_at)]);
+  printListReport('قائمة الرحلات', TripFilter!=='all'?('الحالة: '+(TRIP_STATUS_LABELS[TripFilter]||TripFilter)):'', ['الرحلة','النوع','الجهة','الحالة','تاريخ البداية','تاريخ النهاية','مقدّم الطلب','تاريخ الطلب'], rows);
+};
+Views.exportTripsList = function(){
+  const u = Session.user;
+  let list = visibleTrips(u);
+  if(TripFilter!=='all') list = list.filter(t=>t.trip_status===TripFilter);
+  const rows = list.map(t=>[t.trip_name_ar||'—', t.trip_type||'—', t.entity||'—', t.trip_status, t.start_date||'', t.end_date||'', userLabel(t.created_by), t.created_at||'']);
+  exportListToExcel('trips-list', ['الرحلة','النوع','الجهة','الحالة','تاريخ البداية','تاريخ النهاية','مقدّم الطلب','تاريخ الطلب'], rows);
+};
 
 function renderFederationTree(items, fedKeyFn, tableFor, statsFn){
   const groups = {};
@@ -1610,7 +1679,13 @@ Views.tickets = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   return `
-    <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div>${addBtn}</div>
+    <div class="section-head"><div><div class="eyebrow">تذاكر السفر</div><h2>كل تذاكر/مشاركات المنتدبين</h2></div>
+      <div class="flex gap-8 wrap">
+        <button class="btn btn-outline btn-sm" onclick="Views.printTicketsList()">🖨 طباعة القائمة</button>
+        <button class="btn btn-outline btn-sm" onclick="Views.exportTicketsList()">⭳ تصدير Excel</button>
+        ${addBtn}
+      </div>
+    </div>
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     ${stats}
     <div class="mt-16">
@@ -1622,6 +1697,23 @@ Views.tickets = function(){
   `;
 };
 Views.setTicketFilter = function(k){ TicketFilter = k; App.render(); };
+function _ticketsListRows(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  let list = DB.delegations.filter(d=>tripIds.has(d.trip_id));
+  if(TicketFilter!=='all') list = list.filter(d=>d.delegations_status===TicketFilter);
+  return list.map(d=>{
+    const t = DB.trips.find(x=>x.trip_id===d.trip_id);
+    return [userLabel(d.user_id), t?t.trip_name_ar:'—', d.ticket_type||'—', d.ticket_price, d.amount_delegations, d.total_amount, d.delegations_status, d.created_at||''];
+  });
+}
+Views.printTicketsList = function(){
+  const rows = _ticketsListRows().map(r=>[r[0],r[1],r[2],money(r[3]),money(r[4]),money(r[5]),r[6],r[7]?fmtDate(r[7]):'']);
+  printListReport('قائمة تذاكر السفر', '', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], rows);
+};
+Views.exportTicketsList = function(){
+  exportListToExcel('tickets-list', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], _ticketsListRows());
+};
 
 /* ============================= Other expenses list ============================= */
 let OtherExpFilter = 'all';
@@ -1656,7 +1748,13 @@ Views.otherExpenses = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   return `
-    <div class="section-head"><div><div class="eyebrow">المصاريف الأخرى</div><h2>مصاريف مرتبطة بالرحلات</h2></div>${addBtn}</div>
+    <div class="section-head"><div><div class="eyebrow">المصاريف الأخرى</div><h2>مصاريف مرتبطة بالرحلات</h2></div>
+      <div class="flex gap-8 wrap">
+        <button class="btn btn-outline btn-sm" onclick="Views.printOtherExpensesList()">🖨 طباعة القائمة</button>
+        <button class="btn btn-outline btn-sm" onclick="Views.exportOtherExpensesList()">⭳ تصدير Excel</button>
+        ${addBtn}
+      </div>
+    </div>
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     ${stats}
     <div class="mt-16">
@@ -1668,6 +1766,23 @@ Views.otherExpenses = function(){
   `;
 };
 Views.setOtherExpFilter = function(k){ OtherExpFilter = k; App.render(); };
+function _otherExpensesListRows(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  let list = DB.other_expenses.filter(e=>tripIds.has(e.trip_id));
+  if(OtherExpFilter!=='all') list = list.filter(e=>e.expense_status===OtherExpFilter);
+  return list.map(e=>{
+    const t = DB.trips.find(x=>x.trip_id===e.trip_id);
+    return [e.expense_type||'—', t?t.trip_name_ar:'—', e.beneficiary||'—', e.amount, e.expense_status, e.created_at||''];
+  });
+}
+Views.printOtherExpensesList = function(){
+  const rows = _otherExpensesListRows().map(r=>[r[0],r[1],r[2],money(r[3]),r[4],r[5]?fmtDate(r[5]):'']);
+  printListReport('قائمة المصاريف الأخرى', '', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], rows);
+};
+Views.exportOtherExpensesList = function(){
+  exportListToExcel('other-expenses-list', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], _otherExpensesListRows());
+};
 
 /* ============================= Users (نفس نمط نظام العهد) ============================= */
 Views.users = function(){
@@ -1704,12 +1819,30 @@ Views.users = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   return `
-    <div class="section-head"><div><div class="eyebrow">المستخدمون</div><h2>إدارة المستخدمين</h2></div>${addBtn}</div>
+    <div class="section-head"><div><div class="eyebrow">المستخدمون</div><h2>إدارة المستخدمين</h2></div>
+      <div class="flex gap-8 wrap">
+        <button class="btn btn-outline btn-sm" onclick="Views.printUsersList()">🖨 طباعة القائمة</button>
+        <button class="btn btn-outline btn-sm" onclick="Views.exportUsersList()">⭳ تصدير Excel</button>
+        ${addBtn}
+      </div>
+    </div>
     <div class="alert alert-info mt-16">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor, items=>statChip('العدد', items.length)) : tableFor(list)}
     </div>
   `;
+};
+Views.printUsersList = function(){
+  const u = Session.user;
+  const list = visibleUsers(u);
+  const rows = list.map(x=>{ const s=userTravelStats(x.user_id); return [x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', s.count, money(s.amount), x.user_status||'—']; });
+  printListReport('قائمة المستخدمين', '', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows);
+};
+Views.exportUsersList = function(){
+  const u = Session.user;
+  const list = visibleUsers(u);
+  const rows = list.map(x=>{ const s=userTravelStats(x.user_id); return [x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', s.count, s.amount, x.user_status||'—']; });
+  exportListToExcel('users-list', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows);
 };
 Modals.addUser = function(){
   const u = Session.user;
