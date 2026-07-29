@@ -540,6 +540,15 @@ function listToolbarHTML(printFn, excelFn){
    تسجيل الدخول أصبح في صفحة منفصلة (login.html). هذه الصفحة (نظام العهد)
    تفترض وجود جلسة محفوظة مسبقًا (Auth.readSession)، وإن لم توجد تُعيد
    التوجيه فورًا إلى شاشة اختيار النظام/الدخول. */
+/* ننتظر جاهزية خطوط الويب (بحد أقصى ثانيتين) لتفادي قفزة التخطيط عند أول رسم للواجهة */
+async function waitForFonts(){
+  try{
+    if(document.fonts && document.fonts.ready){
+      await Promise.race([document.fonts.ready, new Promise(r=>setTimeout(r, 2000))]);
+    }
+  }catch(e){ /* تجاهل — بعض المتصفحات القديمة لا تدعم واجهة document.fonts */ }
+}
+
 async function bootApp(){
   const statusEl = document.getElementById('bootStatus');
   const sessionUser = Auth.readSession();
@@ -571,6 +580,10 @@ async function bootApp(){
     Session.user = freshUser;
     Session.view = 'dashboard';
     Session.params = {};
+    // ننتظر تحميل خطوط الويب (Almarai/Tajawal) قبل إظهار الواجهة، حتى لا يحدث
+    // "قفزة" في التخطيط عند تبديل الخط من البديل إلى الخط الفعلي بعد الظهور
+    // (وهو ما كان يجعل شاشة الرئيسية تبدو غير مضبوطة عند أول دخول فقط).
+    await waitForFonts();
     document.getElementById('screen-boot').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
     App.renderShell();
