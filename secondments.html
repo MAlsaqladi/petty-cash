@@ -249,7 +249,7 @@ const Perm = {
   canApproveTrip: u => Perm.isTopApprover(u),
   canCloseTrip: u => Perm.isTopApprover(u),
   canEditTrip: (u,t) => t && t.trip_status==='طلب' && u.federation_id===t.federation_number && (u.user_id===t.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
-  canManageParticipants: (u,t) => t && t.trip_status!=='مغلقة' && t.trip_status!=='مرفوضة' && !Perm.isAuditor(u) && u.federation_id===t.federation_number,
+  canManageParticipants: (u,t) => t && t.trip_status!=='مغلقة' && t.trip_status!=='مرفوضة' && Perm.canRequestTrip(u) && u.federation_id===t.federation_number,
   canApproveParticipant: u => Perm.isTopApprover(u),
   /* منع الموافقة الذاتية: لو المشارك نفسه رئيس الاتحاد، ما يوافق عليه إلا المدير التنفيذي، والعكس صحيح */
   canApproveParticipantRecord: (u, participant) => {
@@ -262,6 +262,15 @@ const Perm = {
   },
   canManageOtherExpenses: (u,t) => t && t.trip_status!=='مغلقة' && t.trip_status!=='مرفوضة' && Perm.isAccountant(u) && u.federation_id===t.federation_number,
   canApproveOtherExpense: u => Perm.isTopApprover(u),
+  /* إذا كان المستفيد من المصروف الآخر هو المدير التنفيذي أو رئيس الاتحاد، يعتمدها الطرف الآخر حصرًا */
+  canApproveOtherExpenseFor: (u, expense) => {
+    const bens = (expense && expense.beneficiary) ? expense.beneficiary.split(/[،,]\s*/) : [];
+    const hasExec = bens.includes('مدير تنفيذي');
+    const hasPres = bens.includes('رئيس الاتحاد');
+    if(hasExec && !hasPres) return Perm.isPresident(u);
+    if(hasPres && !hasExec) return Perm.isExec(u);
+    return Perm.canApproveOtherExpense(u);
+  },
 };
 
 /* ---------------------------- Scoped data ---------------------------- */
@@ -620,17 +629,26 @@ function renderFederationTree(items, fedKeyFn, tableFor, statsFn){
   return Object.keys(groups).map(fedId=>{
     const fed = federationById(fedId);
     const items2 = groups[fedId];
+    const safeId = 'fedgrp_' + String(fedId).replace(/[^a-zA-Z0-9_]/g,'');
     return `<div class="card mt-16">
-      <div class="card-pad" style="padding-bottom:0;">
+      <div class="card-pad" style="padding-bottom:0;cursor:pointer;" onclick="Views.toggleFedGroup('${safeId}')">
         <div class="section-head" style="margin-bottom:8px;">
-          <h3 style="font-size:14px;margin:0;">${esc(fed?fed.federation_name_ar:'بدون اتحاد')}</h3>
+          <h3 style="font-size:14px;margin:0;display:flex;align-items:center;gap:6px;"><span id="${safeId}_arrow" style="display:inline-block;transition:transform .15s;">▶</span> ${esc(fed?fed.federation_name_ar:'بدون اتحاد')}</h3>
           <div class="flex gap-8">${statsFn(items2)}</div>
         </div>
       </div>
-      ${tableFor(items2)}
+      <div id="${safeId}_body" style="display:none;">${tableFor(items2)}</div>
     </div>`;
   }).join('') || `<div class="empty-row">لا توجد بيانات</div>`;
 }
+Views.toggleFedGroup = function(safeId){
+  const body = document.getElementById(safeId+'_body');
+  const arrow = document.getElementById(safeId+'_arrow');
+  if(!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  if(arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+};
 function statChip(lbl, val){ return `<span class="chip on" style="cursor:default;">${esc(lbl)}: <b>${esc(String(val))}</b></span>`; }
 function pendingBlock(title, items, ico){
   if(!items.length) return '';
@@ -669,6 +687,9 @@ Modals.reopenAddTripModal = function(){
 function isTripDraftValid(d){
   if(!d.trip_name_ar.trim() || !d.start_date || !d.end_date) return false;
   if(!d.cost_center_id) return false;
+  if(!d.justifications || !d.justifications.trim()) return false;
+  if(!d.desired_results || !d.desired_results.trim()) return false;
+  if(!d.participants.length) return false;
   return true;
 }
 Modals.renderAddTripBody = function(){
@@ -684,17 +705,17 @@ Modals.renderAddTripBody = function(){
       <span class="at grow"><b>${esc(userLabel(p.user_id))}</b> — ${esc(p.ticket_type||'—')} <span class="muted small">(${esc(p.user_type||'—')})</span></span>
       <span class="atime">${money(p.total_amount)}</span>
       <button class="btn btn-ghost btn-sm" onclick="Modals.removeDraftParticipant(${idx})">✕ حذف</button>
-    </div>`).join('') : `<div class="empty-row">لا يوجد مشاركون مضافون بعد — يمكنك إضافتهم الآن أو لاحقًا من صفحة تفاصيل الرحلة</div>`;
+    </div>`).join('') : `<div class="empty-row">لا يوجد مشاركون بعد — إضافة مشارك واحد على الأقل إلزامية قبل حفظ الرحلة</div>`;
   return `
   <div class="form-grid">
     <div class="field full"><label>اسم الرحلة (عربي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.trip_name_ar)}" oninput="Modals.updateTripField('trip_name_ar',this.value)"></div>
     <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" value="${esc(d.trip_name_en)}" oninput="Modals.updateTripField('trip_name_en',this.value)"></div>
     <div class="field"><label>نوع الرحلة</label><select onchange="Modals.updateTripField('trip_type',this.value)">${typeOpts}</select></div>
     <div class="field"><label>إلى أين (الجهة)</label><select onchange="Modals.updateTripField('entity',this.value)">${entityOpts}</select></div>
-    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date)}" oninput="Modals.updateTripDates('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date)}" oninput="Modals.updateTripDates('end_date',this.value)"></div>
-    <div class="field full"><label>المبررات</label><textarea rows="2" oninput="Modals.updateTripField('justifications',this.value)">${esc(d.justifications)}</textarea></div>
-    <div class="field full"><label>الأهداف المطلوب تحقيقها</label><textarea rows="2" oninput="Modals.updateTripField('desired_results',this.value)">${esc(d.desired_results)}</textarea></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.start_date)}" oninput="Modals.updateTripDates('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.end_date)}" oninput="Modals.updateTripDates('end_date',this.value)"></div>
+    <div class="field full"><label>المبررات <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateTripField('justifications',this.value)">${esc(d.justifications)}</textarea></div>
+    <div class="field full"><label>الأهداف المطلوب تحقيقها <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateTripField('desired_results',this.value)">${esc(d.desired_results)}</textarea></div>
     <div class="field full"><label>ملاحظات أخرى</label><textarea rows="2" oninput="Modals.updateTripField('other_notes',this.value)">${esc(d.other_notes)}</textarea></div>
     <div class="field full">
       <label>مركز التكلفة (فرعي) <span class="muted">— إلزامي، اختر واحدًا فقط</span></label>
@@ -708,7 +729,7 @@ Modals.renderAddTripBody = function(){
       <option value="false" ${!d.has_sports_equipment?'selected':''}>لا</option><option value="true" ${d.has_sports_equipment?'selected':''}>نعم</option></select></div>
   </div>
   <hr class="divider">
-  <div class="subhead"><span class="n">!</span> المشاركون في الانتداب <span class="muted small">— اختياري، يمكن إضافتهم الآن أو لاحقًا</span></div>
+  <div class="subhead"><span class="n">!</span> المشاركون في الانتداب <span class="muted small">— إلزامي، أضف مشاركًا واحدًا على الأقل</span></div>
   <div class="card mt-8">${participantsRows}</div>
   <button class="btn btn-outline btn-sm mt-8" ${(!d.start_date||!d.end_date)?'disabled title="أدخل تاريخ البداية والنهاية أولاً"':''} onclick="Modals.addParticipantDraft()">+ إضافة مشارك</button>
   `;
@@ -729,6 +750,8 @@ Modals.removeDraftParticipant = function(idx){
   TripDraft.participants.splice(idx,1);
   const body = document.getElementById('addTripModalBody');
   if(body) body.innerHTML = Modals.renderAddTripBody();
+  const saveBtn = document.getElementById('saveTripBtn');
+  if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
 };
 Actions.saveTrip = async function(){
   if(SubmitLock.saveTrip) return;
@@ -971,7 +994,7 @@ Views.tripDetail = function(tripId){
 
   const canAddExpense = Perm.canManageOtherExpenses(u,t);
   const expenseRows = f.otherExp.length ? f.otherExp.map(e=>{
-    const canApprove = e.expense_status==='غير معتمد' && Perm.canApproveOtherExpense(u) && sameFed;
+    const canApprove = e.expense_status==='غير معتمد' && Perm.canApproveOtherExpenseFor(u,e) && sameFed;
     return `<tr>
       <td>${esc(e.expense_type||'—')}</td>
       <td>${esc(e.beneficiary||'—')}</td>
@@ -1057,8 +1080,8 @@ Modals.editTrip = function(tripId){
     <div class="field"><label>يشمل نقل؟</label><input type="text" value="${t.is_transportation_available?'نعم':'لا'}" disabled></div>
     <div class="field"><label>يشمل سكن؟</label><input type="text" value="${t.is_accommodation_available?'نعم':'لا'}" disabled></div>
   ` : `
-    <div class="field"><label>تاريخ البداية</label><input type="date" id="etStart" value="${t.start_date?String(t.start_date).slice(0,10):''}"></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" id="etEnd" value="${t.end_date?String(t.end_date).slice(0,10):''}"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" lang="en-GB" id="etStart" value="${t.start_date?String(t.start_date).slice(0,10):''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" lang="en-GB" id="etEnd" value="${t.end_date?String(t.end_date).slice(0,10):''}"></div>
     <div class="field"><label>يشمل نقل؟</label><select id="etTransport">
       <option value="false" ${!t.is_transportation_available?'selected':''}>لا</option><option value="true" ${t.is_transportation_available?'selected':''}>نعم</option></select></div>
     <div class="field"><label>يشمل سكن؟</label><select id="etAccom">
@@ -1255,8 +1278,8 @@ Modals.renderAddParticipantBody = function(){
 
   /* مطابق لتفاصيل الرحلة = نعم → إخفاء تواريخ/أيام/نقل/سكن كليًا (تُنسخ آليًا من الرحلة عند الحفظ) */
   const matchBlock = d.is_linked_to_trip ? '' : `
-    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
     <div class="field"><label>عدد الأيام (تلقائي)</label><input type="text" value="${esc(days||'—')}" disabled></div>
     <div class="field"><label>يشمل نقل؟</label><select onchange="Modals.updateParticipantField('is_transportation_available',this.value==='true')">
       <option value="false" ${!d.is_transportation_available?'selected':''}>لا</option><option value="true" ${d.is_transportation_available?'selected':''}>نعم</option></select></div>
@@ -1525,14 +1548,16 @@ Actions.saveOtherExpense = async function(tripId){
 };
 Actions.approveOtherExpense = async function(expenseId){
   const u = Session.user;
-  if(!Perm.canApproveOtherExpense(u)){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  const e = DB.other_expenses.find(x=>x.expense_id===expenseId);
+  if(!e || !Perm.canApproveOtherExpenseFor(u,e)){ toast('لا تملك صلاحية الاعتماد (قد يتطلب اعتماد جهة أخرى تجنبًا لتعارض المصالح)','danger'); return; }
   const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
   if(!saved) return;
   toast('تم اعتماد المصروف','success'); App.render();
 };
 Actions.cancelOtherExpense = async function(expenseId){
   const u = Session.user;
-  if(!Perm.canApproveOtherExpense(u)){ toast('لا تملك صلاحية الإلغاء','danger'); return; }
+  const e = DB.other_expenses.find(x=>x.expense_id===expenseId);
+  if(!e || !Perm.canApproveOtherExpenseFor(u,e)){ toast('لا تملك صلاحية الإلغاء','danger'); return; }
   const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'ملغى' });
   if(!saved) return;
   toast('تم إلغاء المصروف','success'); App.render();
