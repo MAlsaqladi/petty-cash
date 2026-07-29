@@ -488,7 +488,7 @@ function buildListPrintHTML(title, subtitle, headers, rows, stats){
     ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
   const statsHTML = (stats && stats.length) ? `<div class="print-balance-strip">${stats.map(s=>`
-    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div></div>`).join('')}</div>` : '';
+    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div>${s.sub?`<div class="sub2">${esc(s.sub)}</div>`:''}</div>`).join('')}</div>` : '';
   return `
   <div class="print-doc">
     <div class="print-header">
@@ -906,7 +906,7 @@ function pendingBlock(title, items, ico){
    CUSTODY LIST — table rows (not cards)
    ========================================================================= */
 function statsGridHTML(stats){
-  return `<div class="stats-grid">${stats.map(s=>`<div class="stat-card"><div class="lbl">${esc(s.label)}</div><div class="val num">${esc(String(s.value))}</div></div>`).join('')}</div>`;
+  return `<div class="stats-grid">${stats.map(s=>`<div class="stat-card"><div class="lbl">${esc(s.label)}</div><div class="val num">${esc(String(s.value))}</div>${s.sub?`<div class="sub">${esc(s.sub)}</div>`:''}</div>`).join('')}</div>`;
 }
 function computeCustodyListStats(list){
   const openList = list.filter(c=>c.custody_status==='مفتوحة');
@@ -917,13 +917,14 @@ function computeCustodyListStats(list){
   const closedSpent = closedList.reduce((s,c)=>s+custodyFinancials(c).approvedExpenses,0);
   const rejectedTotal = rejectedList.reduce((s,c)=>s+custodyFinancials(c).totalBudget,0);
   const totalBalance = openList.reduce((s,c)=>s+custodyFinancials(c).remainingBalance,0);
+  const totalFunds = list.reduce((s,c)=>{ const f=custodyFinancials(c); return s + f.opening + f.totalTransferred; },0);
   return [
-    {label:'إجمالي عدد العهد', value: list.length},
-    {label:'مفتوحة', value: `${openList.length} — ${money(openSpent)}`},
-    {label:'مغلقة', value: `${closedList.length} — ${money(closedSpent)}`},
+    {label:'إجمالي عدد العهد', value: list.length, sub: 'تحويلات + أرصدة افتتاحية: '+money(totalFunds)},
+    {label:'مفتوحة (إجمالي المصروف)', value: money(openSpent), sub: openList.length+' عهدة'},
+    {label:'مغلقة (إجمالي المصروف)', value: money(closedSpent), sub: closedList.length+' عهدة'},
     {label:'بانتظار الاعتماد (تنتظر الصرف)', value: pendingList.length},
-    {label:'مرفوضة', value: `${rejectedList.length} — ${money(rejectedTotal)}`},
-    {label:'إجمالي أرصدة العهد المفتوحة', value: money(totalBalance)},
+    {label:'مرفوضة (الإجمالي)', value: money(rejectedTotal), sub: rejectedList.length+' عهدة'},
+    {label:'إجمالي أرصدة العهد المفتوحة', value: money(totalBalance), sub: openList.length+' عهدة'},
   ];
 }
 Views.dashboard = function(){
@@ -1108,9 +1109,9 @@ function computeBudgetsListStats(allList){
   return [
     {label:'إجمالي البنود', value: allList.length},
     {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
-    {label:'معتمد', value: `${approved.length} — ${money(approvedAmt)}`},
-    {label:'غير معتمد', value: `${pending.length} — ${money(pendingAmt)}`},
-    {label:'ملغى', value: `${cancelled.length} — ${money(cancelledAmt)}`},
+    {label:'معتمد', value: money(approvedAmt), sub: approved.length+' بند'},
+    {label:'غير معتمد', value: money(pendingAmt), sub: pending.length+' بند'},
+    {label:'ملغى', value: money(cancelledAmt), sub: cancelled.length+' بند'},
   ];
 }
 Views.printBudgetsList = function(){
@@ -1190,7 +1191,7 @@ function computeTransfersListStats(u, transferList){
     {label:'إجمالي عدد التحويلات', value: transferList.length},
     {label:'إجمالي المبلغ (محوّل + بانتظار التحويل)', value: money(totalTransferred+pendingTransferSum)},
     {label:'إجمالي ما تم تحويله', value: money(totalTransferred)},
-    {label:'المتبقي للتحويل', value: `${pendingTransferCount} عهدة — ${money(pendingTransferSum)}`},
+    {label:'المتبقي للتحويل', value: money(pendingTransferSum), sub: pendingTransferCount+' عهدة'},
   ];
 }
 Views.exportTransfersList = function(){
@@ -1278,9 +1279,9 @@ function computeExpensesListStats(allList){
   return [
     {label:'إجمالي المصاريف', value: allList.length},
     {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
-    {label:'معتمد', value: `${approved.length} — ${money(approvedAmt)}`},
-    {label:'غير معتمد', value: `${pending.length} — ${money(pendingAmt)}`},
-    {label:'ملغى', value: `${cancelled.length} — ${money(cancelledAmt)}`},
+    {label:'معتمد', value: money(approvedAmt), sub: approved.length+' مصروف'},
+    {label:'غير معتمد', value: money(pendingAmt), sub: pending.length+' مصروف'},
+    {label:'ملغى', value: money(cancelledAmt), sub: cancelled.length+' مصروف'},
   ];
 }
 Views.printExpensesList = function(){
@@ -2556,7 +2557,7 @@ function computeUsersListStats(list){
   USER_STATUSES.forEach(st=>{
     const group = list.filter(x=>x.user_status===st);
     if(!group.length) return;
-    stats.push({label: st, value: `${group.length} — ${money(group.reduce((s,x)=>s+userOpenBalance(x.user_id),0))}`});
+    stats.push({label: st, value: money(group.reduce((s,x)=>s+userOpenBalance(x.user_id),0)), sub: group.length+' مستخدم'});
   });
   return stats;
 }
