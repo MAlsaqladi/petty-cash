@@ -905,6 +905,30 @@ function pendingBlock(title, items, ico){
 /* =========================================================================
    CUSTODY LIST — table rows (not cards)
    ========================================================================= */
+function statsGridHTML(stats){
+  return `<div class="stats-grid">${stats.map(s=>`<div class="stat-card"><div class="lbl">${esc(s.label)}</div><div class="val num">${esc(String(s.value))}</div></div>`).join('')}</div>`;
+}
+function computeCustodyListStats(list){
+  const openList = list.filter(c=>c.custody_status==='مفتوحة');
+  const closedList = list.filter(c=>c.custody_status==='مغلقة');
+  const pendingList = list.filter(c=>c.custody_status==='قيد الاعتماد');
+  const rejectedList = list.filter(c=>c.custody_status==='مرفوضة');
+  const openSpent = openList.reduce((s,c)=>s+custodyFinancials(c).approvedExpenses,0);
+  const closedSpent = closedList.reduce((s,c)=>s+custodyFinancials(c).approvedExpenses,0);
+  const rejectedTotal = rejectedList.reduce((s,c)=>s+custodyFinancials(c).totalBudget,0);
+  const totalBalance = openList.reduce((s,c)=>s+custodyFinancials(c).remainingBalance,0);
+  return [
+    {label:'إجمالي عدد العهد', value: list.length},
+    {label:'مفتوحة (العدد)', value: openList.length},
+    {label:'مفتوحة (إجمالي المصروف)', value: money(openSpent)},
+    {label:'مغلقة (العدد)', value: closedList.length},
+    {label:'مغلقة (إجمالي المصروف)', value: money(closedSpent)},
+    {label:'بانتظار الاعتماد (تنتظر الصرف)', value: pendingList.length},
+    {label:'مرفوضة (العدد)', value: rejectedList.length},
+    {label:'مرفوضة (الإجمالي)', value: money(rejectedTotal)},
+    {label:'إجمالي أرصدة العهد المفتوحة', value: money(totalBalance)},
+  ];
+}
 Views.dashboard = function(){
   const u = Session.user;
   let list = visibleCustodies(u);
@@ -931,6 +955,7 @@ Views.dashboard = function(){
 
   const addBtn = Perm.canRequestCustody(u) ? `<button class="btn btn-primary" onclick="Modals.addCustody()">+ طلب عهدة جديدة</button>` : '';
   const isAud = Perm.isAuditor(u);
+  const statsHTML = statsGridHTML(computeCustodyListStats(list));
 
   function rowsHTML(items){
     return items.length ? items.map(c=>{
@@ -973,6 +998,7 @@ Views.dashboard = function(){
       <div><div class="eyebrow">إدارة العهد</div><h2>العهد النقدية</h2></div>
       <div class="flex gap-8 wrap">${printExportBtns}${addBtn}</div>
     </div>
+    ${statsHTML}
     <div class="section-head mt-16">
       <div class="pill-tabs">${tabsHTML}</div>
       <div class="search-box">
@@ -998,17 +1024,7 @@ Views.printCustodyList = function(){
     const f = custodyFinancials(c);
     return [c.description_ar||'بدون وصف', userLabel(c.received_by_user_id), c.custody_status, money(f.approvedBudget), money(f.totalTransferred), money(f.remainingBalance), f.spentPct+'%', fmtDate(c.Closing_date)];
   });
-  const open = list.filter(c=>c.custody_status==='مفتوحة').length;
-  const pending = list.filter(c=>c.custody_status==='قيد الاعتماد').length;
-  const closed = list.filter(c=>c.custody_status==='مغلقة').length;
-  const totalBalance = list.reduce((s,c)=>s+custodyFinancials(c).remainingBalance,0);
-  const stats = [
-    {label:'إجمالي العهد', value: list.length},
-    {label:'مفتوحة', value: open},
-    {label:'قيد الاعتماد', value: pending},
-    {label:'مغلقة', value: closed},
-    {label:'إجمالي الرصيد الحالي', value: money(totalBalance)},
-  ];
+  const stats = computeCustodyListStats(list);
   printListReport('قائمة العهد النقدية', DashState.statusFilter!=='all' ? ('الحالة: '+DashState.statusFilter) : '', ['العهدة','صاحب العهدة','الحالة','الميزانية المعتمدة','المحوّل','الرصيد الحالي','نسبة الصرف','تاريخ الإغلاق'], rows, stats);
 };
 Views.exportCustodyList = function(){
@@ -1031,20 +1047,8 @@ Views.budgetsList = function(){
   const u = Session.user;
   const cIds = visibleCustodyIds(u);
   const allList = DB.custody_budgets.filter(b=>cIds.has(b.custody_id));
-  // exclude cancelled + budgets belonging to rejected custodies from sums
-  const countable = allList.filter(b=>{ const c=DB.custodies.find(x=>x.custody_id===b.custody_id); return b.Record_Status!=='ملغى' && c && c.custody_status!=='مرفوضة'; });
-  const pending = countable.filter(b=>b.Record_Status==='قيد الاعتماد');
-  const approved = countable.filter(b=>b.Record_Status==='معتمد');
-  const cancelled = allList.filter(b=>b.Record_Status==='ملغى');
-  const sumAmt = countable.reduce((s,b)=>s+Number(b.estimated_amount||0),0);
-  const approvedAmt = approved.reduce((s,b)=>s+Number(b.estimated_amount||0),0);
-
-  const stats = `
-  <div class="stats-grid">
-    <div class="stat-card accent-teal"><div class="lbl">إجمالي البنود</div><div class="val num">${allList.length}</div><div class="sub">${pending.length} قيد الاعتماد · ${approved.length} معتمدة · ${cancelled.length} ملغاة</div></div>
-    <div class="stat-card accent-warn"><div class="lbl">إجمالي المبلغ (غير الملغى)</div><div class="val num">${money(sumAmt)}</div></div>
-    <div class="stat-card accent-teal"><div class="lbl">إجمالي المعتمد</div><div class="val num">${money(approvedAmt)}</div></div>
-  </div>`;
+  const statsArr = computeBudgetsListStats(allList);
+  const stats = statsGridHTML(statsArr);
 
   let list = allList;
   const tabs = [{k:'all',l:'الكل'},{k:'قيد الاعتماد',l:'قيد الاعتماد'},{k:'معتمد',l:'معتمد'},{k:'ملغى',l:'ملغى'}];
@@ -1097,23 +1101,32 @@ function _budgetsListRows(){
     return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), expenseTypeLabel(b.expense_type_id), costCenterLabel(b.cost_center_id), b.estimated_amount, b.Record_Status, b.created_at?fmtDate(b.created_at):''];
   });
 }
+function computeBudgetsListStats(allList){
+  const pending = allList.filter(b=>b.Record_Status==='قيد الاعتماد');
+  const approved = allList.filter(b=>b.Record_Status==='معتمد');
+  const cancelled = allList.filter(b=>b.Record_Status==='ملغى');
+  const pendingAmt = pending.reduce((s,b)=>s+Number(b.estimated_amount||0),0);
+  const approvedAmt = approved.reduce((s,b)=>s+Number(b.estimated_amount||0),0);
+  const cancelledAmt = cancelled.reduce((s,b)=>s+Number(b.estimated_amount||0),0);
+  return [
+    {label:'إجمالي البنود', value: allList.length},
+    {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
+    {label:'معتمد (العدد)', value: approved.length},
+    {label:'معتمد (المبلغ)', value: money(approvedAmt)},
+    {label:'غير معتمد (العدد)', value: pending.length},
+    {label:'غير معتمد (المبلغ)', value: money(pendingAmt)},
+    {label:'ملغى (العدد)', value: cancelled.length},
+    {label:'ملغى (المبلغ)', value: money(cancelledAmt)},
+  ];
+}
 Views.printBudgetsList = function(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  const allList = DB.custody_budgets.filter(b=>cIds.has(b.custody_id));
   const raw = _budgetsListRows();
   const rows = raw.map(r=>[r[0],r[1],r[2],r[3],money(r[4]),r[5],r[6]]);
-  const pending = raw.filter(r=>r[5]==='قيد الاعتماد').length;
-  const approved = raw.filter(r=>r[5]==='معتمد').length;
-  const cancelled = raw.filter(r=>r[5]==='ملغى').length;
-  const totalAmt = raw.filter(r=>r[5]!=='ملغى').reduce((s,r)=>s+Number(r[4]||0),0);
-  const approvedAmt = raw.filter(r=>r[5]==='معتمد').reduce((s,r)=>s+Number(r[4]||0),0);
-  const stats = [
-    {label:'إجمالي البنود', value: raw.length},
-    {label:'قيد الاعتماد', value: pending},
-    {label:'معتمدة', value: approved},
-    {label:'ملغاة', value: cancelled},
-    {label:'إجمالي المبلغ', value: money(totalAmt)},
-    {label:'إجمالي المعتمد', value: money(approvedAmt)},
-  ];
-  printListReport('قائمة المصاريف التقديرية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], rows, stats);
+  const stats = computeBudgetsListStats(allList);
+  printListReport('قائمة المصاريف التقديرية', ListFilter.budgets!=='all'?('الحالة: '+ListFilter.budgets):'', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], rows, stats);
 };
 Views.exportBudgetsList = function(){
   exportListToExcel('estimated-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], _budgetsListRows());
@@ -1123,15 +1136,7 @@ Views.transfersList = function(){
   const u = Session.user;
   const cIds = visibleCustodyIds(u);
   let list = DB.custody_transfers.filter(t=>cIds.has(t.custody_id));
-  const sumAmt = list.reduce((s,t)=>s+Number(t.amount||0),0);
-  const avgAmt = list.length ? sumAmt/list.length : 0;
-
-  const stats = `
-  <div class="stats-grid">
-    <div class="stat-card accent-teal"><div class="lbl">عدد التحويلات</div><div class="val num">${list.length}</div></div>
-    <div class="stat-card accent-gold"><div class="lbl">إجمالي المحوّل</div><div class="val num">${money(sumAmt)}</div></div>
-    <div class="stat-card"><div class="lbl">متوسط التحويل</div><div class="val num">${money(avgAmt)}</div></div>
-  </div>`;
+  const stats = statsGridHTML(computeTransfersListStats(u, list));
 
   list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
   function rowsFor(items){
@@ -1176,15 +1181,25 @@ Views.printTransfersList = function(){
     const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
     return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), t.statement||'—', money(t.amount), t.currency||'SAR', userLabel(t.created_by), fmtDateTime(t.created_at)];
   });
-  const sumAmt = list.reduce((s,t)=>s+Number(t.amount||0),0);
-  const avgAmt = list.length ? sumAmt/list.length : 0;
-  const stats = [
-    {label:'عدد التحويلات', value: list.length},
-    {label:'إجمالي المحوّل', value: money(sumAmt)},
-    {label:'متوسط التحويل', value: money(avgAmt)},
-  ];
+  const stats = computeTransfersListStats(u, list);
   printListReport('قائمة التحويلات', '', ['العهدة','صاحب العهدة','البيان','المبلغ','العملة','بواسطة','التاريخ'], rows, stats);
 };
+function computeTransfersListStats(u, transferList){
+  const totalTransferred = transferList.reduce((s,t)=>s+Number(t.amount||0),0);
+  const custodies = visibleCustodies(u).filter(c=>c.custody_status==='مفتوحة');
+  let pendingTransferSum = 0, pendingTransferCount = 0;
+  custodies.forEach(c=>{
+    const pt = custodyFinancials(c).pendingTransfer;
+    if(pt>0){ pendingTransferSum += pt; pendingTransferCount++; }
+  });
+  return [
+    {label:'إجمالي عدد التحويلات', value: transferList.length},
+    {label:'إجمالي المبلغ (محوّل + بانتظار التحويل)', value: money(totalTransferred+pendingTransferSum)},
+    {label:'إجمالي ما تم تحويله', value: money(totalTransferred)},
+    {label:'إجمالي المتبقي للتحويل', value: money(pendingTransferSum)},
+    {label:'عدد العهد بانتظار التحويل', value: pendingTransferCount},
+  ];
+}
 Views.exportTransfersList = function(){
   const u = Session.user;
   const cIds = visibleCustodyIds(u);
@@ -1200,22 +1215,12 @@ Views.expensesList = function(){
   const u = Session.user;
   const cIds = visibleCustodyIds(u);
   const allList = DB.custody_closures.filter(e=>cIds.has(e.custody_id));
-  const pending = allList.filter(e=>e.disbursement_status==='غير معتمد');
-  const approved = allList.filter(e=>e.disbursement_status==='معتمد');
-  const cancelled = allList.filter(e=>e.disbursement_status==='ملغى');
-  const sumAmt = approved.reduce((s,e)=>s+Number(e.amount||0),0);
-
-  const stats = `
-  <div class="stats-grid">
-    <div class="stat-card accent-teal"><div class="lbl">إجمالي المصاريف</div><div class="val num">${allList.length}</div><div class="sub">${pending.length} بانتظار الاعتماد · ${approved.length} معتمدة · ${cancelled.length} ملغاة</div></div>
-    <div class="stat-card accent-danger"><div class="lbl">إجمالي المعتمد</div><div class="val num">${money(sumAmt)}</div></div>
-  </div>`;
+  const stats = statsGridHTML(computeExpensesListStats(allList));
 
   let list = allList;
   const tabs = [{k:'all',l:'الكل'},{k:'غير معتمد',l:'غير معتمد'},{k:'معتمد',l:'معتمد'},{k:'ملغى',l:'ملغى'}];
   const tabsHTML = tabs.map(t=>`<button class="pill-tab ${ListFilter.expenses===t.k?'active':''}" onclick="Views.setListFilter('expenses','${t.k}')">${t.l}</button>`).join('');
   if(ListFilter.expenses!=='all') list = list.filter(e=>e.disbursement_status===ListFilter.expenses);
-  list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
   list = list.slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
   function rowsFor(items){
     return items.length ? items.map(e=>{
@@ -1270,21 +1275,32 @@ function _expensesListRows(){
     return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), expenseTypeLabel(e.expense_type_id), costCenterLabel(e.cost_center_id), e.statement||'—', e.amount, e.disbursement_status, userLabel(e.created_by), e.created_at||''];
   });
 }
+function computeExpensesListStats(allList){
+  const pending = allList.filter(e=>e.disbursement_status==='غير معتمد');
+  const approved = allList.filter(e=>e.disbursement_status==='معتمد');
+  const cancelled = allList.filter(e=>e.disbursement_status==='ملغى');
+  const pendingAmt = pending.reduce((s,e)=>s+Number(e.amount||0),0);
+  const approvedAmt = approved.reduce((s,e)=>s+Number(e.amount||0),0);
+  const cancelledAmt = cancelled.reduce((s,e)=>s+Number(e.amount||0),0);
+  return [
+    {label:'إجمالي المصاريف', value: allList.length},
+    {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
+    {label:'معتمد (العدد)', value: approved.length},
+    {label:'معتمد (المبلغ)', value: money(approvedAmt)},
+    {label:'غير معتمد (العدد)', value: pending.length},
+    {label:'غير معتمد (المبلغ)', value: money(pendingAmt)},
+    {label:'ملغى (العدد)', value: cancelled.length},
+    {label:'ملغى (المبلغ)', value: money(cancelledAmt)},
+  ];
+}
 Views.printExpensesList = function(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  const allList = DB.custody_closures.filter(e=>cIds.has(e.custody_id));
   const raw = _expensesListRows();
   const rows = raw.map(r=>[r[0],r[1],r[2],r[3],r[4],money(r[5]),r[6],r[7],r[8]?fmtDate(r[8]):'']);
-  const pending = raw.filter(r=>r[6]==='غير معتمد').length;
-  const approved = raw.filter(r=>r[6]==='معتمد').length;
-  const cancelled = raw.filter(r=>r[6]==='ملغى').length;
-  const approvedAmt = raw.filter(r=>r[6]==='معتمد').reduce((s,r)=>s+Number(r[5]||0),0);
-  const stats = [
-    {label:'إجمالي المصاريف', value: raw.length},
-    {label:'بانتظار الاعتماد', value: pending},
-    {label:'معتمدة', value: approved},
-    {label:'ملغاة', value: cancelled},
-    {label:'إجمالي المعتمد', value: money(approvedAmt)},
-  ];
-  printListReport('قائمة المصاريف الفعلية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], rows, stats);
+  const stats = computeExpensesListStats(allList);
+  printListReport('قائمة المصاريف الفعلية', ListFilter.expenses!=='all'?('الحالة: '+ListFilter.expenses):'', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], rows, stats);
 };
 Views.exportExpensesList = function(){
   exportListToExcel('actual-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], _expensesListRows());
@@ -2486,6 +2502,7 @@ Views.users = function(){
   const list = visibleUsers(u).slice().sort((a,b)=> new Date(b.created_at||0)-new Date(a.created_at||0));
   const addBtn = Perm.canManageUsers(u) ? `<button class="btn btn-primary" onclick="Modals.addUser()">+ إضافة مستخدم</button>` : '';
   const isAud = Perm.isAuditor(u);
+  const statsHTML = statsGridHTML(computeUsersListStats(list));
 
   function rowsFor(items){
     return items.length ? items.map(x=>{
@@ -2530,6 +2547,7 @@ Views.users = function(){
         ${addBtn}
       </div>
     </div>
+    ${statsHTML}
     <div class="alert alert-info">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم (تحويلهم إلى "مفتوح") إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor, items=>{
@@ -2540,19 +2558,24 @@ Views.users = function(){
     </div>
   `;
 };
+function computeUsersListStats(list){
+  const stats = [
+    {label:'إجمالي عدد المستخدمين', value: list.length},
+    {label:'إجمالي أرصدتهم', value: money(list.reduce((s,x)=>s+userOpenBalance(x.user_id),0))},
+  ];
+  USER_STATUSES.forEach(st=>{
+    const group = list.filter(x=>x.user_status===st);
+    if(!group.length) return;
+    stats.push({label:`${st} (العدد)`, value: group.length});
+    stats.push({label:`${st} (الرصيد)`, value: money(group.reduce((s,x)=>s+userOpenBalance(x.user_id),0))});
+  });
+  return stats;
+}
 Views.printUsersList = function(){
   const u = Session.user;
   const list = visibleUsers(u);
   const rows = list.map(x=>[x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', money(userOpenBalance(x.user_id)), x.user_status||'—']);
-  const pendingCount = list.filter(x=>x.user_status==='تحت المعالجة').length;
-  const openCount = list.filter(x=>x.user_status==='مفتوح').length;
-  const totalBalance = list.reduce((s,x)=>s+userOpenBalance(x.user_id),0);
-  const stats = [
-    {label:'إجمالي المستخدمين', value: list.length},
-    {label:'مفعّلون', value: openCount},
-    {label:'بانتظار الاعتماد', value: pendingCount},
-    {label:'إجمالي الرصيد المفتوح', value: money(totalBalance)},
-  ];
+  const stats = computeUsersListStats(list);
   printListReport('قائمة المستخدمين', '', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows, stats);
 };
 Views.exportUsersList = function(){
