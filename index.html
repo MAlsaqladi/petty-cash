@@ -475,6 +475,61 @@ function exportWorkbook(){
   XLSX.writeFile(wb, 'custody-backup-' + stamp + '.xlsx');
 }
 
+/* =========================================================================
+   طباعة/تصدير أي قائمة (جدول) معروضة في الواجهة — تُستخدم بأعلى كل صفحة قوائم
+   headers: مصفوفة نصوص لعناوين الأعمدة
+   rows: مصفوفة مصفوفات (كل عنصر خلية نصية جاهزة للعرض)
+   ========================================================================= */
+function buildListPrintHTML(title, subtitle, headers, rows){
+  const u = Session.user;
+  const fed = federationById(u ? u.federation_id : null);
+  const theadHTML = headers.map(h=>`<th>${esc(h)}</th>`).join('');
+  const rowsHTML = rows.length
+    ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
+    : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
+  return `
+  <div class="print-doc">
+    <div class="print-header">
+      <div class="print-header-row">
+        <div class="print-org">
+          <img src="logo.png" alt="">
+          <div>
+            <div class="print-org-name">${esc(fed?fed.federation_name_ar:'كل الاتحادات')}</div>
+            <div class="print-sys-name">نظام إدارة العهد النقدية</div>
+          </div>
+        </div>
+        <div class="print-meta">
+          <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
+          <div>عدد السجلات: ${rows.length}</div>
+        </div>
+      </div>
+      <h1 class="print-title">${esc(title)}</h1>
+      ${subtitle ? `<div class="print-subtitle">${esc(subtitle)}</div>` : ''}
+    </div>
+    <table class="print-tbl">
+      <thead><tr>${theadHTML}</tr></thead>
+      <tbody>${rowsHTML}</tbody>
+    </table>
+    <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية</div>
+  </div>`;
+}
+function printListReport(title, subtitle, headers, rows){
+  let area = document.getElementById('printArea');
+  if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
+  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows);
+  setTimeout(()=>window.print(), 80);
+}
+function exportListToExcel(filename, headers, rows){
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : filename + '.xlsx');
+}
+function listToolbarHTML(printFn, excelFn){
+  return `<button class="btn btn-outline btn-sm" onclick="${printFn}">🖨 طباعة القائمة</button>
+    <button class="btn btn-outline btn-sm" onclick="${excelFn}">⭳ تصدير Excel</button>`;
+}
+
 /* ---------------------------- App bootstrap ----------------------------
    تسجيل الدخول أصبح في صفحة منفصلة (login.html). هذه الصفحة (نظام العهد)
    تفترض وجود جلسة محفوظة مسبقًا (Auth.readSession)، وإن لم توجد تُعيد
@@ -907,10 +962,13 @@ Views.dashboard = function(){
     </div>`;
   }
 
+  const printExportBtns = `<button class="btn btn-outline btn-sm" onclick="Views.printCustodyList()">🖨 طباعة القائمة</button>
+    <button class="btn btn-outline btn-sm" onclick="Views.exportCustodyList()">⭳ تصدير Excel</button>`;
+
   return `
     <div class="section-head">
       <div><div class="eyebrow">إدارة العهد</div><h2>العهد النقدية</h2></div>
-      ${addBtn}
+      <div class="flex gap-8 wrap">${printExportBtns}${addBtn}</div>
     </div>
     <div class="section-head mt-16">
       <div class="pill-tabs">${tabsHTML}</div>
@@ -928,6 +986,26 @@ Views.dashboard = function(){
       }) : tableFor(list)}
     </div>
   `;
+};
+Views.printCustodyList = function(){
+  const u = Session.user;
+  let list = visibleCustodies(u);
+  if(DashState.statusFilter!=='all') list = list.filter(c=>c.custody_status===DashState.statusFilter);
+  const rows = list.map(c=>{
+    const f = custodyFinancials(c);
+    return [c.description_ar||'بدون وصف', userLabel(c.received_by_user_id), c.custody_status, money(f.approvedBudget), money(f.totalTransferred), money(f.remainingBalance), f.spentPct+'%', fmtDate(c.Closing_date)];
+  });
+  printListReport('قائمة العهد النقدية', DashState.statusFilter!=='all' ? ('الحالة: '+DashState.statusFilter) : '', ['العهدة','صاحب العهدة','الحالة','الميزانية المعتمدة','المحوّل','الرصيد الحالي','نسبة الصرف','تاريخ الإغلاق'], rows);
+};
+Views.exportCustodyList = function(){
+  const u = Session.user;
+  let list = visibleCustodies(u);
+  if(DashState.statusFilter!=='all') list = list.filter(c=>c.custody_status===DashState.statusFilter);
+  const rows = list.map(c=>{
+    const f = custodyFinancials(c);
+    return [c.description_ar||'بدون وصف', userLabel(c.received_by_user_id), c.custody_status, f.approvedBudget, f.totalTransferred, f.remainingBalance, f.spentPct, c.Closing_date||''];
+  });
+  exportListToExcel('custodies-list', ['العهدة','صاحب العهدة','الحالة','الميزانية المعتمدة','المحوّل','الرصيد الحالي','نسبة الصرف %','تاريخ الإغلاق'], rows);
 };
 Views.setDashFilter = function(k){ DashState.statusFilter = k; App.render(); };
 Views.setDashQuery = function(v){ DashState.q = v; App.render(); };
@@ -978,9 +1056,11 @@ Views.budgetsList = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   const isAud = Perm.isAuditor(u);
+  const printExportBtns = `<button class="btn btn-outline btn-sm" onclick="Views.printBudgetsList()">🖨 طباعة القائمة</button>
+    <button class="btn btn-outline btn-sm" onclick="Views.exportBudgetsList()">⭳ تصدير Excel</button>`;
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف التقديرية</div><h2>المصاريف التقديرية</h2></div>
-      ${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>` : ''}
+      <div class="flex gap-8 wrap">${printExportBtns}${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('feed')">⭈ طلب تغذية لعهدة</button>` : ''}</div>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -992,6 +1072,23 @@ Views.budgetsList = function(){
       }) : tableFor(list)}
     </div>
   `;
+};
+function _budgetsListRows(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  let list = DB.custody_budgets.filter(b=>cIds.has(b.custody_id));
+  if(ListFilter.budgets!=='all') list = list.filter(b=>b.Record_Status===ListFilter.budgets);
+  return list.map(b=>{
+    const c = DB.custodies.find(x=>x.custody_id===b.custody_id);
+    return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), expenseTypeLabel(b.expense_type_id), costCenterLabel(b.cost_center_id), b.estimated_amount, b.Record_Status, b.created_at?fmtDate(b.created_at):''];
+  });
+}
+Views.printBudgetsList = function(){
+  const rows = _budgetsListRows().map(r=>[r[0],r[1],r[2],r[3],money(r[4]),r[5],r[6]]);
+  printListReport('قائمة المصاريف التقديرية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], rows);
+};
+Views.exportBudgetsList = function(){
+  exportListToExcel('estimated-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], _budgetsListRows());
 };
 
 Views.transfersList = function(){
@@ -1028,9 +1125,11 @@ Views.transfersList = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   const isAud = Perm.isAuditor(u);
+  const printExportBtns = `<button class="btn btn-outline btn-sm" onclick="Views.printTransfersList()">🖨 طباعة القائمة</button>
+    <button class="btn btn-outline btn-sm" onclick="Views.exportTransfersList()">⭳ تصدير Excel</button>`;
   return `
     <div class="section-head"><div><div class="eyebrow">التحويلات</div><h2>التحويلات إلى العهد</h2></div>
-      ${Perm.canTransfer(u) ? `<button class="btn btn-gold" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>` : ''}
+      <div class="flex gap-8 wrap">${printExportBtns}${Perm.canTransfer(u) ? `<button class="btn btn-gold" onclick="Modals.pickCustody('transfer')">⭳ تحويل لعهدة</button>` : ''}</div>
     </div>
     ${stats}
     <div class="mt-16">
@@ -1040,6 +1139,26 @@ Views.transfersList = function(){
       }) : tableFor(list)}
     </div>
   `;
+};
+Views.printTransfersList = function(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  const list = DB.custody_transfers.filter(t=>cIds.has(t.custody_id));
+  const rows = list.map(t=>{
+    const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
+    return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), t.statement||'—', money(t.amount), t.currency||'SAR', userLabel(t.created_by), fmtDateTime(t.created_at)];
+  });
+  printListReport('قائمة التحويلات', '', ['العهدة','صاحب العهدة','البيان','المبلغ','العملة','بواسطة','التاريخ'], rows);
+};
+Views.exportTransfersList = function(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  const list = DB.custody_transfers.filter(t=>cIds.has(t.custody_id));
+  const rows = list.map(t=>{
+    const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
+    return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), t.statement||'—', t.amount, t.currency||'SAR', userLabel(t.created_by), t.created_at||''];
+  });
+  exportListToExcel('transfers-list', ['العهدة','صاحب العهدة','البيان','المبلغ','العملة','بواسطة','التاريخ'], rows);
 };
 
 Views.expensesList = function(){
@@ -1089,9 +1208,11 @@ Views.expensesList = function(){
     <tbody>${rowsFor(items)}</tbody></table></div>`;
   }
   const isAud = Perm.isAuditor(u);
+  const printExportBtns = `<button class="btn btn-outline btn-sm" onclick="Views.printExpensesList()">🖨 طباعة القائمة</button>
+    <button class="btn btn-outline btn-sm" onclick="Views.exportExpensesList()">⭳ تصدير Excel</button>`;
   return `
     <div class="section-head"><div><div class="eyebrow">المصاريف الفعلية</div><h2>المصاريف الفعلية</h2></div>
-      ${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>` : ''}
+      <div class="flex gap-8 wrap">${printExportBtns}${!isAud ? `<button class="btn btn-primary" onclick="Modals.pickCustody('expense')">+ إضافة مصروف</button>` : ''}</div>
     </div>
     ${stats}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
@@ -1103,6 +1224,23 @@ Views.expensesList = function(){
       }) : tableFor(list)}
     </div>
   `;
+};
+function _expensesListRows(){
+  const u = Session.user;
+  const cIds = visibleCustodyIds(u);
+  let list = DB.custody_closures.filter(e=>cIds.has(e.custody_id));
+  if(ListFilter.expenses!=='all') list = list.filter(e=>e.disbursement_status===ListFilter.expenses);
+  return list.map(e=>{
+    const c = DB.custodies.find(x=>x.custody_id===e.custody_id);
+    return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), expenseTypeLabel(e.expense_type_id), costCenterLabel(e.cost_center_id), e.statement||'—', e.amount, e.disbursement_status, userLabel(e.created_by), e.created_at||''];
+  });
+}
+Views.printExpensesList = function(){
+  const rows = _expensesListRows().map(r=>[r[0],r[1],r[2],r[3],r[4],money(r[5]),r[6],r[7],r[8]?fmtDate(r[8]):'']);
+  printListReport('قائمة المصاريف الفعلية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], rows);
+};
+Views.exportExpensesList = function(){
+  exportListToExcel('actual-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], _expensesListRows());
 };
 Views.setListFilter = function(list, k){ ListFilter[list] = k; App.render(); };
 Views.custodyDetail = function(id){
@@ -1378,8 +1516,7 @@ function renderCostCenterDropdown(fedCC, selected){
 }
 Modals.setDraftCC = function(val){
   CustodyDraft.cost_centers = val ? [val] : [];
-  const saveBtn = document.getElementById('saveCustodyBtn');
-  if(saveBtn) saveBtn.disabled = !isCustodyDraftValid(CustodyDraft);
+  refreshAddCustodyModal();
 };
 function renderCostCenterPicker(fedCC, selected){
   if(!fedCC.length){
@@ -2340,7 +2477,11 @@ Views.users = function(){
   return `
     <div class="section-head">
       <div><div class="eyebrow">إدارة الوصول</div><h2>المستخدمون</h2></div>
-      ${addBtn}
+      <div class="flex gap-8 wrap">
+        <button class="btn btn-outline btn-sm" onclick="Views.printUsersList()">🖨 طباعة القائمة</button>
+        <button class="btn btn-outline btn-sm" onclick="Views.exportUsersList()">⭳ تصدير Excel</button>
+        ${addBtn}
+      </div>
     </div>
     <div class="alert alert-info">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم (تحويلهم إلى "مفتوح") إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="mt-16">
@@ -2351,6 +2492,18 @@ Views.users = function(){
       }) : tableFor(list)}
     </div>
   `;
+};
+Views.printUsersList = function(){
+  const u = Session.user;
+  const list = visibleUsers(u);
+  const rows = list.map(x=>[x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', money(userOpenBalance(x.user_id)), x.user_status||'—']);
+  printListReport('قائمة المستخدمين', '', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows);
+};
+Views.exportUsersList = function(){
+  const u = Session.user;
+  const list = visibleUsers(u);
+  const rows = list.map(x=>[x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', userOpenBalance(x.user_id), x.user_status||'—']);
+  exportListToExcel('users-list', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows);
 };
 
 Modals.addUser = function(){
