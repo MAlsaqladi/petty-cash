@@ -103,8 +103,21 @@ a{color:inherit;}
 /* =====================================================
    SCREEN: file picker / login (centered stage)
    ===================================================== */
-.stage{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-.stage-card{width:100%;max-width:430px;}
+.stage{
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+  background-color:#14261B;
+  background-image:
+    linear-gradient(rgba(15,28,20,.82), rgba(15,28,20,.82)),
+    url('login-bg.jpg');
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+}
+.stage-card{
+  width:100%;max-width:430px;
+  background:#fff;border-radius:22px;padding:36px 32px;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.45);
+}
 .brandmark{
   width:56px;height:56px;border-radius:14px;
   background:linear-gradient(155deg, var(--teal) 0%, var(--teal-dark) 100%);
@@ -147,8 +160,15 @@ a{color:inherit;}
    ===================================================== */
 #app-shell{display:flex;min-height:100vh;}
 .sidebar{
-  width:230px;flex-shrink:0;background:var(--ink);color:#c9d6cc;
+  width:230px;flex-shrink:0;color:#c9d6cc;
   display:flex;flex-direction:column;padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto;
+  background-color:var(--ink);
+  background-image:
+    linear-gradient(rgba(20,38,27,.9), rgba(20,38,27,.9)),
+    url('sidebar-bg.jpg');
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
 }
 .sb-brand{display:flex;align-items:center;gap:10px;padding:0 6px 20px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:16px;}
 .sb-brand .mark{width:34px;height:34px;border-radius:9px;background:var(--gold);display:flex;align-items:center;justify-content:center;font-family:'Almarai';font-weight:800;color:#1c1404;flex-shrink:0;}
