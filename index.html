@@ -145,7 +145,9 @@ const Perm = {
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
   // عضو مجلس الإدارة: يشوف كل شيء مثل رئيس الاتحاد تمامًا، لكن لا يعتمد/يوافق على شيء،
   // ولا يضيف مستخدمين، وعهدته الخاصة به فقط (طلب/صرف/تغذية) — ولا يقدر يحوّل رصيد إطلاقًا.
-  isRestrictedToOwnCustody: u => Perm.isBasicStaff(u) || Perm.isBoardMember(u),
+  // المحاسب هو الوحيد المخوَّل بطلب عهدة/تغذية لشخص آخر — أي شخص غيره (حتى رئيس الاتحاد
+  // والمدير التنفيذي وعضو مجلس الإدارة) مقيَّد بعهدته الخاصة فقط.
+  isRestrictedToOwnCustody: u => !Perm.isAccountant(u),
   canManageUsers: u => !Perm.isBasicStaff(u) && !Perm.isBoardMember(u),
   canChangeUserStatus: u => Perm.isTopApprover(u),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
@@ -156,9 +158,41 @@ const Perm = {
   canEditCustody: (u,c) => c && c.custody_status==='قيد الاعتماد' && u.federation_id===c.federation_id && (u.user_id===c.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
   canEditBudgetLine: (u,c,b) => c && b && b.Record_Status==='قيد الاعتماد' && u.federation_id===c.federation_id && (u.user_id===c.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
   canEditExpense: (u,c,e) => c && e && e.disbursement_status==='غير معتمد' && u.federation_id===c.federation_id && (u.user_id===e.created_by || Perm.isTopApprover(u) || Perm.isAccountant(u)),
-  canTransfer: u => Perm.isAccountant(u) || Perm.isTopApprover(u),
+  // التحويل: المحاسب فقط
+  canTransfer: u => Perm.isAccountant(u),
   canApproveExpense: u => Perm.isAccountant(u) || Perm.isExec(u),
   canCloseCustody: u => Perm.isTopApprover(u),
+  /* -------- منع الاعتماد الذاتي: إذا كانت العهدة لرئيس الاتحاد أو المدير التنفيذي أو المحاسب،
+     الطرف الآخر (أو جهة مستقلة) هي من تعتمد/تقفل/توافق على مصاريفها، وليس صاحبها نفسه -------- */
+  requiredApproverOverride: c => {
+    const holder = c ? userById(c.received_by_user_id) : null;
+    if(!holder) return null;
+    if(holder.user_type==='مدير تنفيذي') return 'isPresident';
+    if(holder.user_type==='رئيس الاتحاد') return 'isExec';
+    return null;
+  },
+  canApproveCustodyRequestFor: (u,c) => {
+    const ov = Perm.requiredApproverOverride(c);
+    if(ov) return Perm[ov](u);
+    return Perm.canApproveCustodyRequest(u);
+  },
+  canCloseCustodyFor: (u,c) => {
+    const ov = Perm.requiredApproverOverride(c);
+    if(ov) return Perm[ov](u);
+    return Perm.canCloseCustody(u);
+  },
+  canApproveBudgetLineFor: (u,c) => {
+    const ov = Perm.requiredApproverOverride(c);
+    if(ov) return Perm[ov](u);
+    return Perm.canApproveCustodyRequest(u);
+  },
+  canApproveExpenseFor: (u,c) => {
+    const ov = Perm.requiredApproverOverride(c);
+    if(ov) return Perm[ov](u);
+    // المحاسب لا يعتمد مصاريف عهدته الخاصة — يعتمدها المدير التنفيذي بدلاً منه
+    if(Perm.isAccountant(u) && c && u.user_id===c.received_by_user_id) return Perm.isExec(u);
+    return Perm.canApproveExpense(u);
+  },
 };
 
 /* ---------------------------- Scoped data ---------------------------- */
@@ -845,8 +879,8 @@ Views.dashboard = function(){
       const f = custodyFinancials(c);
       const overdue = isOverdue(c);
       const w = custodyWaitingLabel(c);
-      const canRowApprove = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id && f.budgets.length>0;
-      const canRowCancel = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && c.federation_id===u.federation_id;
+      const canRowApprove = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequestFor(u,c) && c.federation_id===u.federation_id && f.budgets.length>0;
+      const canRowCancel = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequestFor(u,c) && c.federation_id===u.federation_id;
       const rowBtns = [];
       if(canRowApprove) rowBtns.push(`<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();Actions.approveCustodyRequest('${c.custody_id}')">اعتماد</button>`);
       if(canRowCancel) rowBtns.push(`<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();Actions.rejectCustodyRequest('${c.custody_id}')">إلغاء</button>`);
@@ -1032,7 +1066,7 @@ Views.expensesList = function(){
   function rowsFor(items){
     return items.length ? items.map(e=>{
       const c = DB.custodies.find(x=>x.custody_id===e.custody_id);
-      const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpense(u) && c && c.federation_id===u.federation_id;
+      const canApprove = e.disbursement_status==='غير معتمد' && c && Perm.canApproveExpenseFor(u,c) && c.federation_id===u.federation_id;
       return `<tr style="${e.disbursement_status==='ملغى'?'opacity:.55;':''}">
         <td class="clickable-row" onclick="App.go('custodyDetail',{id:'${e.custody_id}'})"><b>${esc(c?c.description_ar:'—')}</b><div class="muted small">${esc(userLabel(c?c.received_by_user_id:null))}</div></td>
         <td>${esc(expenseTypeLabel(e.expense_type_id))}</td>
@@ -1086,9 +1120,9 @@ Views.custodyDetail = function(id){
   if(!canSeeThis) return `<div class="card card-pad">لا تملك صلاحية عرض هذه العهدة.</div>`;
 
   const sameFed = c.federation_id===u.federation_id;
-  const canApproveReq = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequest(u) && sameFed;
+  const canApproveReq = c.custody_status==='قيد الاعتماد' && Perm.canApproveCustodyRequestFor(u,c) && sameFed;
   const canTransferNow = c.custody_status==='مفتوحة' && f.pendingTransfer>0 && Perm.canTransfer(u) && sameFed && u.user_id!==c.request_approved_by;
-  const canCloseNow = c.custody_status==='مفتوحة' && f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0 && f.pendingTransfer===0 && Perm.canCloseCustody(u) && sameFed;
+  const canCloseNow = c.custody_status==='مفتوحة' && f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0 && f.pendingTransfer===0 && Perm.canCloseCustodyFor(u,c) && sameFed;
   const canEditReq = Perm.canEditCustody(u,c);
   const waiting = custodyWaitingLabel(c);
 
@@ -1158,7 +1192,7 @@ Views.custodyDetail = function(id){
   const canAddBudget = c.custody_status!=='مغلقة' && c.custody_status!=='مرفوضة' && !Perm.isAuditor(u) && sameFed && !permCapReached
     && (!Perm.isRestrictedToOwnCustody(u) || u.user_id===c.received_by_user_id);
   const budgetRows = f.budgets.length ? f.budgets.map(b=>{
-    const canApproveLine = b.Record_Status==='قيد الاعتماد' && c.custody_status==='مفتوحة' && Perm.canApproveCustodyRequest(u) && sameFed;
+    const canApproveLine = b.Record_Status==='قيد الاعتماد' && c.custody_status==='مفتوحة' && Perm.canApproveBudgetLineFor(u,c) && sameFed;
     const canEditLine = Perm.canEditBudgetLine(u,c,b);
     const rowActions = [`<button class="btn btn-ghost btn-sm" onclick="Modals.viewAudit('budget','${c.custody_id}','${b.budget_id}')">تفاصيل</button>`];
     if(canEditLine) rowActions.push(`<button class="btn btn-ghost btn-sm" onclick="Modals.editBudgetLine('${c.custody_id}','${b.budget_id}')">تعديل</button>`);
@@ -1212,7 +1246,7 @@ Views.custodyDetail = function(id){
   /* ---------------- expenses table ---------------- */
   const canAddExpense = c.custody_status==='مفتوحة' && f.availableToSpend>0 && (u.user_id===c.received_by_user_id || Perm.isAccountant(u)) && sameFed;
   const expenseRows = f.expenses.length ? f.expenses.map(e=>{
-    const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpense(u) && sameFed;
+    const canApprove = e.disbursement_status==='غير معتمد' && Perm.canApproveExpenseFor(u,c) && sameFed;
     const canEditExp = Perm.canEditExpense(u,c,e);
     const rowActions = [
       locationBtnHTML(e.entry_location),
@@ -1295,7 +1329,7 @@ Modals.renderAddCustodyBody = function(){
 
   const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}" ${d.received_by_user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
   const typeOpts = CUSTODY_TYPES.map(t=>`<option value="${esc(t)}" ${d.custody_type===t?'selected':''}>${esc(t)}</option>`).join('');
-  const ccPickerHTML = renderCostCenterPicker(fedCC, d.cost_centers);
+  const ccPickerHTML = renderCostCenterDropdown(fedCC, d.cost_centers);
 
   const linesHTML = renderBudgetLinesEditor();
 
@@ -1312,9 +1346,9 @@ Modals.renderAddCustodyBody = function(){
     <div class="field full"><label>وصف العهدة (إنجليزي) <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.description_en)}" oninput="Modals.updateDraftField('description_en',this.value)"></div>
     <div class="field"><label>مكان الصرف <span class="muted">— إلزامي</span></label><input type="text" value="${esc(d.disbursement_location)}" oninput="Modals.updateDraftField('disbursement_location',this.value)"></div>
     <div class="field"><label>الرصيد الافتتاحي</label><input type="number" min="0" step="0.01" value="${d.Opening_balance}" oninput="CustodyDraft.Opening_balance=this.value"></div>
-    <div class="field full"><label>تاريخ الإغلاق المتوقع <span class="muted">— إلزامي</span></label><input type="date" value="${esc(d.Closing_date)}" oninput="Modals.updateDraftField('Closing_date',this.value)"></div>
+    <div class="field full"><label>تاريخ الإغلاق المتوقع <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.Closing_date)}" oninput="Modals.updateDraftField('Closing_date',this.value)"></div>
     <div class="field full">
-      <label>مراكز التكلفة (يمكن اختيار أكثر من واحد)</label>
+      <label>مركز التكلفة (فرعي فقط) <span class="muted">— إلزامي</span></label>
       ${ccPickerHTML}
     </div>
   </div>
@@ -1324,6 +1358,29 @@ Modals.renderAddCustodyBody = function(){
   `;
 };
 
+function renderCostCenterDropdown(fedCC, selected){
+  const subs = fedCC.filter(cc=>cc.parent_cost_center_id);
+  if(!subs.length){
+    return `<div class="muted small">لا توجد مراكز تكلفة فرعية لهذا الاتحاد بعد. أضفها أولاً من صفحة مراكز التكلفة.</div>`;
+  }
+  const mains = fedCC.filter(cc=>!cc.parent_cost_center_id)
+    .sort((a,b)=> MAIN_COST_CENTERS.indexOf(a.cost_center_name_ar) - MAIN_COST_CENTERS.indexOf(b.cost_center_name_ar));
+  const selectedVal = selected && selected.length ? selected[0] : '';
+  const optionsHTML = mains.map(m=>{
+    const subOpts = subs.filter(s=>s.parent_cost_center_id===m.cost_center_id)
+      .map(s=>`<option value="${s.cost_center_id}" ${selectedVal===s.cost_center_id?'selected':''}>${esc(s.cost_center_name_ar)}</option>`).join('');
+    return subOpts ? `<optgroup label="${esc(m.cost_center_name_ar)}">${subOpts}</optgroup>` : '';
+  }).join('');
+  return `<select onchange="Modals.setDraftCC(this.value)">
+    <option value="">— اختر مركز التكلفة —</option>
+    ${optionsHTML}
+  </select>`;
+}
+Modals.setDraftCC = function(val){
+  CustodyDraft.cost_centers = val ? [val] : [];
+  const saveBtn = document.getElementById('saveCustodyBtn');
+  if(saveBtn) saveBtn.disabled = !isCustodyDraftValid(CustodyDraft);
+};
 function renderCostCenterPicker(fedCC, selected){
   if(!fedCC.length){
     return `<div class="muted small">لا توجد مراكز تكلفة لهذا الاتحاد بعد. أضف مراكز التكلفة أولاً من القائمة الجانبية.</div>`;
@@ -1619,7 +1676,7 @@ Modals.editCustody = function(custodyId){
   const selectedCC = custodyCostCenterIds(c);
   const usersOpts = fedUsers.map(x=>`<option value="${x.user_id}" ${c.received_by_user_id===x.user_id?'selected':''}>${esc(x.employee_name_ar)} — ${esc(x.Job_Title||x.user_type)}</option>`).join('');
   const typeOpts = CUSTODY_TYPES.map(t=>`<option value="${esc(t)}" ${c.custody_type===t?'selected':''}>${esc(t)}</option>`).join('');
-  const ccChips = fedCC.map(cc=>`<span class="chip ${selectedCC.includes(cc.cost_center_id)?'on':''}" onclick="this.classList.toggle('on')" data-cc="${cc.cost_center_id}">${esc(cc.cost_center_name_ar)}</span>`).join('');
+  const ccDropdownHTML = renderCostCenterDropdown(fedCC, selectedCC).replace('onchange="Modals.setDraftCC(this.value)"','id="ecCcSelect"');
   // الموظف والموارد البشرية وعضو مجلس الإدارة لا يستطيعون تحويل العهدة لشخص آخر عند التعديل أيضًا
   const holder = userById(c.received_by_user_id);
   const ecHolderHTML = Perm.isRestrictedToOwnCustody(u)
@@ -1633,8 +1690,8 @@ Modals.editCustody = function(custodyId){
       <div class="field full"><label>وصف العهدة (إنجليزي)</label><input type="text" id="ecDescEn" value="${esc(c.description_en||'')}"></div>
       <div class="field"><label>مكان الصرف</label><input type="text" id="ecLoc" value="${esc(c.disbursement_location||'')}"></div>
       <div class="field"><label>الرصيد الافتتاحي</label><input type="number" id="ecOpen" min="0" step="0.01" value="${c.Opening_balance||0}"></div>
-      <div class="field full"><label>تاريخ الإغلاق المتوقع</label><input type="date" id="ecClosing" value="${c.Closing_date?String(c.Closing_date).slice(0,10):''}"></div>
-      <div class="field full"><label>مراكز التكلفة</label><div class="chip-select" id="ecCcSelect">${ccChips}</div></div>
+      <div class="field full"><label>تاريخ الإغلاق المتوقع</label><input type="date" lang="en-GB" id="ecClosing" value="${c.Closing_date?String(c.Closing_date).slice(0,10):''}"></div>
+      <div class="field full"><label>مركز التكلفة (فرعي فقط)</label>${ccDropdownHTML}</div>
     </div>
   `;
   openModalHTML(modalShell('editCustodyModal','تعديل بيانات طلب العهدة', body, true,
@@ -1839,7 +1896,11 @@ Actions.saveBudgetLine = async function(custodyId){
 Actions.approveCustodyRequest = async function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveCustodyRequest(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية الاعتماد','danger'); return; }
+  if(!Perm.canApproveCustodyRequestFor(u,c) || c.federation_id!==u.federation_id){
+    const ov = Perm.requiredApproverOverride(c);
+    toast(ov ? `لا تملك صلاحية الاعتماد — هذه العهدة تتطلب اعتماد ${ov==='isPresident'?'رئيس الاتحاد':'المدير التنفيذي'} تجنبًا لتعارض المصالح` : 'لا تملك صلاحية الاعتماد', 'danger');
+    return;
+  }
   const budgets = DB.custody_budgets.filter(b=>b.custody_id===custodyId);
   if(!budgets.length){ toast('لا يمكن الاعتماد قبل إضافة مصاريف تقديرية','danger'); return; }
   const patch = { custody_status:'مفتوحة', request_approved_by:u.user_id, request_approval_date: nowISO() };
@@ -1857,7 +1918,7 @@ Actions.approveCustodyRequest = async function(custodyId){
 Actions.rejectCustodyRequest = async function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveCustodyRequest(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية الرفض','danger'); return; }
+  if(!Perm.canApproveCustodyRequestFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية الرفض','danger'); return; }
   if(!confirm('هل أنت متأكد من رفض طلب العهدة؟')) return;
   const saved = await dbUpdate('custodies','custody_id',custodyId, { custody_status:'مرفوضة', request_approved_by:u.user_id, request_approval_date: nowISO() });
   if(!saved) return;
@@ -1868,7 +1929,7 @@ Actions.rejectCustodyRequest = async function(custodyId){
 Actions.approveBudgetLine = async function(custodyId, budgetId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveCustodyRequest(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية اعتماد بند المصروف التقديري','danger'); return; }
+  if(!Perm.canApproveBudgetLineFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية اعتماد بند المصروف التقديري','danger'); return; }
   if(c.custody_status!=='مفتوحة'){ toast('لا يمكن اعتماد بند إلا لعهدة مفتوحة','danger'); return; }
   const b = DB.custody_budgets.find(x=>x.budget_id===budgetId);
   if(!b || b.Record_Status==='معتمد') return;
@@ -1960,7 +2021,7 @@ Actions.saveExpense = async function(custodyId){
 Actions.approveExpense = async function(custodyId, closureId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveExpense(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية اعتماد المصروف','danger'); return; }
+  if(!Perm.canApproveExpenseFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية اعتماد المصروف','danger'); return; }
   const saved = await dbUpdate('custody_closures','closure_id',closureId, { disbursement_status:'معتمد', approved_by:u.user_id, approved_at: nowISO() });
   if(!saved) return;
   toast('تم اعتماد المصروف','success');
@@ -1971,7 +2032,7 @@ Actions.closeCustody = async function(custodyId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
   const f = custodyFinancials(c);
-  if(!Perm.canCloseCustody(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إقفال العهدة','danger'); return; }
+  if(!Perm.canCloseCustodyFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إقفال العهدة','danger'); return; }
   if(!(f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0)){ toast('لا يمكن إقفال العهدة قبل تسوية الرصيد بالكامل','danger'); return; }
   if(!confirm('هل تريد تأكيد إقفال هذه العهدة نهائيًا؟')) return;
   const saved = await dbUpdate('custodies','custody_id',custodyId, {
@@ -1985,7 +2046,7 @@ Actions.closeCustody = async function(custodyId){
 Actions.cancelBudgetLine = async function(custodyId, budgetId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveCustodyRequest(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إلغاء بند المصروف التقديري','danger'); return; }
+  if(!Perm.canApproveBudgetLineFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إلغاء بند المصروف التقديري','danger'); return; }
   const b = DB.custody_budgets.find(x=>x.budget_id===budgetId);
   if(!b || b.Record_Status!=='قيد الاعتماد') return;
   if(!confirm('هل تريد إلغاء هذا البند؟ لن يتم احتسابه ضمن إجمالي المصاريف التقديرية.')) return;
@@ -2013,7 +2074,7 @@ Actions.updateBudgetLine = async function(custodyId, budgetId){
 Actions.cancelExpense = async function(custodyId, closureId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
-  if(!Perm.canApproveExpense(u) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إلغاء هذا المصروف','danger'); return; }
+  if(!Perm.canApproveExpenseFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية إلغاء هذا المصروف','danger'); return; }
   const e = DB.custody_closures.find(x=>x.closure_id===closureId);
   if(!e || e.disbursement_status!=='غير معتمد') return;
   if(!confirm('هل تريد إلغاء هذا المصروف؟ لن يتم احتسابه.')) return;
@@ -2057,8 +2118,9 @@ Actions.updateCustody = async function(custodyId){
   if(!Perm.canEditCustody(u,c)){ toast('لا يمكن تعديل هذا الطلب','danger'); return; }
   const descAr = document.getElementById('ecDescAr').value.trim();
   if(!descAr){ toast('أدخل وصف العهدة','danger'); return; }
-  const ccChips = Array.from(document.querySelectorAll('#ecCcSelect .chip.on')).map(el=>el.getAttribute('data-cc'));
-  if(!ccChips.length){ toast('اختر مركز تكلفة واحدًا على الأقل','danger'); return; }
+  const ccVal = document.getElementById('ecCcSelect').value;
+  if(!ccVal){ toast('اختر مركز التكلفة','danger'); return; }
+  const ccChips = [ccVal];
   const openingBalance = Number(document.getElementById('ecOpen').value||0);
   const patch = {
     received_by_user_id: document.getElementById('ecHolder').value,
