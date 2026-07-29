@@ -370,7 +370,7 @@ function buildListPrintHTML(title, subtitle, headers, rows, stats){
     ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
   const statsHTML = (stats && stats.length) ? `<div class="print-balance-strip">${stats.map(s=>`
-    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div></div>`).join('')}</div>` : '';
+    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div>${s.sub?`<div class="sub2">${esc(s.sub)}</div>`:''}</div>`).join('')}</div>` : '';
   return `
   <div class="print-doc">
     <div class="print-header">
@@ -403,6 +403,9 @@ function printListReport(title, subtitle, headers, rows, stats){
   if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
   area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows, stats);
   setTimeout(()=>window.print(), 80);
+}
+function statsGridHTML(stats){
+  return `<div class="stats-grid">${stats.map(s=>`<div class="stat-card"><div class="lbl">${esc(s.label)}</div><div class="val num">${esc(String(s.value))}</div>${s.sub?`<div class="sub">${esc(s.sub)}</div>`:''}</div>`).join('')}</div>`;
 }
 function exportListToExcel(filename, headers, rows){
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -639,6 +642,23 @@ Views.dashboard = function(){
 
 /* ============================= Trips list ============================= */
 let TripFilter = 'all';
+function computeTripsListStats(list){
+  const pendingReq = list.filter(t=>t.trip_status==='طلب');
+  const inDisbursement = list.filter(t=>t.trip_status==='قيد الصرف');
+  const closed = list.filter(t=>t.trip_status==='مغلقة');
+  const rejected = list.filter(t=>t.trip_status==='مرفوضة');
+  const disbursementAmt = inDisbursement.reduce((s,t)=>s+tripFinancials(t).totalApproved,0);
+  const closedAmt = closed.reduce((s,t)=>s+tripFinancials(t).totalApproved,0);
+  const approvedAmt = list.reduce((s,t)=>s+tripFinancials(t).totalApproved,0);
+  return [
+    {label:'إجمالي الرحلات', value: list.length},
+    {label:'بانتظار الاعتماد', value: pendingReq.length},
+    {label:'قيد الصرف', value: money(disbursementAmt), sub: inDisbursement.length+' رحلة'},
+    {label:'مغلقة', value: money(closedAmt), sub: closed.length+' رحلة'},
+    {label:'مرفوضة', value: rejected.length},
+    {label:'إجمالي المصروف المعتمد', value: money(approvedAmt)},
+  ];
+}
 Views.trips = function(){
   const u = Session.user;
   let list = visibleTrips(u).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
@@ -647,6 +667,7 @@ Views.trips = function(){
   const tabsHTML = tabs.map(tb=>`<button class="pill-tab ${TripFilter===tb.k?'active':''}" onclick="Views.setTripFilter('${tb.k}')">${tb.l}</button>`).join('');
   if(TripFilter!=='all') list = list.filter(t=>t.trip_status===TripFilter);
   const isAud = Perm.isAuditor(u);
+  const statsHTML = statsGridHTML(computeTripsListStats(list));
   function rowsFor(items){
     return items.length ? items.map(t=>`
       <tr class="clickable-row" onclick="App.go('tripDetail',{id:'${t.trip_id}'})">
@@ -670,6 +691,7 @@ Views.trips = function(){
         ${addBtn}
       </div>
     </div>
+    ${statsHTML}
     <div class="pill-tabs mt-16">${tabsHTML}</div>
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, t=>t.federation_number, tableFor, items=>{
@@ -685,19 +707,7 @@ Views.printTripsList = function(){
   let list = visibleTrips(u);
   if(TripFilter!=='all') list = list.filter(t=>t.trip_status===TripFilter);
   const rows = list.map(t=>[t.trip_name_ar||'—', t.trip_type||'—', t.entity||'—', TRIP_STATUS_LABELS[t.trip_status]||t.trip_status, fmtDate(t.start_date), fmtDate(t.end_date), userLabel(t.created_by), fmtDate(t.created_at)]);
-  const pendingReq = list.filter(t=>t.trip_status==='طلب').length;
-  const inDisbursement = list.filter(t=>t.trip_status==='قيد الصرف').length;
-  const closed = list.filter(t=>t.trip_status==='مغلقة').length;
-  const rejected = list.filter(t=>t.trip_status==='مرفوضة').length;
-  const approvedAmt = list.reduce((s,t)=>s+tripFinancials(t).totalApproved,0);
-  const stats = [
-    {label:'إجمالي الرحلات', value: list.length},
-    {label:'بانتظار الاعتماد', value: pendingReq},
-    {label:'قيد الصرف', value: inDisbursement},
-    {label:'مغلقة', value: closed},
-    {label:'مرفوضة', value: rejected},
-    {label:'المصروف المعتمد', value: money(approvedAmt)},
-  ];
+  const stats = computeTripsListStats(list);
   printListReport('قائمة الرحلات', TripFilter!=='all'?('الحالة: '+(TRIP_STATUS_LABELS[TripFilter]||TripFilter)):'', ['الرحلة','النوع','الجهة','الحالة','تاريخ البداية','تاريخ النهاية','مقدّم الطلب','تاريخ الطلب'], rows, stats);
 };
 Views.exportTripsList = function(){
@@ -1661,6 +1671,21 @@ Actions.cancelOtherExpense = async function(expenseId){
 
 /* ============================= Tickets (all delegations) list ============================= */
 let TicketFilter = 'all';
+function computeTicketsListStats(allList){
+  const pending = allList.filter(d=>d.delegations_status==='غير معتمد');
+  const approved = allList.filter(d=>d.delegations_status==='معتمد');
+  const rejected = allList.filter(d=>d.delegations_status==='مرفوض');
+  const pendingAmt = pending.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const approvedAmt = approved.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  const rejectedAmt = rejected.reduce((s,d)=>s+Number(d.total_amount||0),0);
+  return [
+    {label:'إجمالي التذاكر/المشاركات', value: allList.length},
+    {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
+    {label:'معتمد', value: money(approvedAmt), sub: approved.length+' مشارك'},
+    {label:'غير معتمد', value: money(pendingAmt), sub: pending.length+' مشارك'},
+    {label:'مرفوض', value: money(rejectedAmt), sub: rejected.length+' مشارك'},
+  ];
+}
 Views.tickets = function(){
   const u = Session.user;
   const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
@@ -1668,12 +1693,8 @@ Views.tickets = function(){
   const addBtn = Perm.canRequestTrip(u) ? `<button class="btn btn-primary" onclick="Modals.pickTripForTicket()">+ انتداب جديد</button>` : '';
   const tabs = [{k:'all',l:'الكل'},{k:'غير معتمد',l:'غير معتمد'},{k:'معتمد',l:'معتمد'},{k:'مرفوض',l:'مرفوض'}];
   const tabsHTML = tabs.map(tb=>`<button class="pill-tab ${TicketFilter===tb.k?'active':''}" onclick="Views.setTicketFilter('${tb.k}')">${tb.l}</button>`).join('');
+  const statsHTML = statsGridHTML(computeTicketsListStats(list));
   if(TicketFilter!=='all') list = list.filter(d=>d.delegations_status===TicketFilter);
-  const sumAmt = list.filter(d=>d.delegations_status!=='مرفوض').reduce((s,d)=>s+Number(d.total_amount||0),0);
-  const stats = `<div class="stats-grid">
-    <div class="stat-card accent-teal"><div class="lbl">عدد التذاكر/المشاركات</div><div class="val num">${list.length}</div></div>
-    <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ (باستثناء المرفوض)</div><div class="val num">${money(sumAmt)}</div></div>
-  </div>`;
   const isAud = Perm.isAuditor(u);
   function rowsFor(items){
     return items.length ? items.map(d=>{
@@ -1703,7 +1724,7 @@ Views.tickets = function(){
       </div>
     </div>
     <div class="pill-tabs mt-16">${tabsHTML}</div>
-    ${stats}
+    ${statsHTML}
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, d=>d.federation_number, tableFor, items=>{
         const total = items.filter(d=>d.delegations_status!=='مرفوض').reduce((s,d)=>s+Number(d.total_amount||0),0);
@@ -1724,13 +1745,12 @@ function _ticketsListRows(){
   });
 }
 Views.printTicketsList = function(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  const allList = DB.delegations.filter(d=>tripIds.has(d.trip_id));
   const raw = _ticketsListRows();
   const rows = raw.map(r=>[r[0],r[1],r[2],money(r[3]),money(r[4]),money(r[5]),r[6],r[7]?fmtDate(r[7]):'']);
-  const sumAmt = raw.filter(r=>r[6]!=='مرفوض').reduce((s,r)=>s+Number(r[5]||0),0);
-  const stats = [
-    {label:'عدد التذاكر/المشاركات', value: raw.length},
-    {label:'إجمالي المبالغ (باستثناء المرفوض)', value: money(sumAmt)},
-  ];
+  const stats = computeTicketsListStats(allList);
   printListReport('قائمة تذاكر السفر', '', ['المشارك','الرحلة','نوع التذكرة','سعر التذكرة','بدل الانتداب','الإجمالي','الحالة','التاريخ'], rows, stats);
 };
 Views.exportTicketsList = function(){
@@ -1739,6 +1759,21 @@ Views.exportTicketsList = function(){
 
 /* ============================= Other expenses list ============================= */
 let OtherExpFilter = 'all';
+function computeOtherExpensesListStats(allList){
+  const pending = allList.filter(e=>e.expense_status==='غير معتمد');
+  const approved = allList.filter(e=>e.expense_status==='معتمد');
+  const cancelled = allList.filter(e=>e.expense_status==='ملغى');
+  const pendingAmt = pending.reduce((s,e)=>s+Number(e.amount||0),0);
+  const approvedAmt = approved.reduce((s,e)=>s+Number(e.amount||0),0);
+  const cancelledAmt = cancelled.reduce((s,e)=>s+Number(e.amount||0),0);
+  return [
+    {label:'إجمالي المصاريف', value: allList.length},
+    {label:'إجمالي المبلغ (معتمد + غير معتمد)', value: money(pendingAmt+approvedAmt)},
+    {label:'معتمد', value: money(approvedAmt), sub: approved.length+' مصروف'},
+    {label:'غير معتمد', value: money(pendingAmt), sub: pending.length+' مصروف'},
+    {label:'ملغى', value: money(cancelledAmt), sub: cancelled.length+' مصروف'},
+  ];
+}
 Views.otherExpenses = function(){
   const u = Session.user;
   const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
@@ -1746,13 +1781,8 @@ Views.otherExpenses = function(){
   const addBtn = Perm.canRequestTrip(u) ? `<button class="btn btn-primary" onclick="Modals.pickTripForExpense()">+ إضافة مصروف آخر</button>` : '';
   const tabs = [{k:'all',l:'الكل'},{k:'غير معتمد',l:'غير معتمد'},{k:'معتمد',l:'معتمد'},{k:'ملغى',l:'مرفوض/ملغى'}];
   const tabsHTML = tabs.map(tb=>`<button class="pill-tab ${OtherExpFilter===tb.k?'active':''}" onclick="Views.setOtherExpFilter('${tb.k}')">${tb.l}</button>`).join('');
+  const statsHTML = statsGridHTML(computeOtherExpensesListStats(list));
   if(OtherExpFilter!=='all') list = list.filter(e=>e.expense_status===OtherExpFilter);
-  const nonCancelled = list.filter(e=>e.expense_status!=='ملغى');
-  const sumAmt = nonCancelled.reduce((s,e)=>s+Number(e.amount||0),0);
-  const stats = `<div class="stats-grid">
-    <div class="stat-card accent-teal"><div class="lbl">عدد المصاريف</div><div class="val num">${list.length}</div></div>
-    <div class="stat-card accent-gold"><div class="lbl">إجمالي المبالغ (باستثناء المرفوضة)</div><div class="val num">${money(sumAmt)}</div></div>
-  </div>`;
   const isAud = Perm.isAuditor(u);
   function rowsFor(items){
     return items.length ? items.map(e=>{
@@ -1778,7 +1808,7 @@ Views.otherExpenses = function(){
       </div>
     </div>
     <div class="pill-tabs mt-16">${tabsHTML}</div>
-    ${stats}
+    ${statsHTML}
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, e=>e.federation_number, tableFor, items=>{
         const total = items.filter(e=>e.expense_status!=='ملغى').reduce((s,e)=>s+Number(e.amount||0),0);
@@ -1799,13 +1829,12 @@ function _otherExpensesListRows(){
   });
 }
 Views.printOtherExpensesList = function(){
+  const u = Session.user;
+  const tripIds = new Set(visibleTrips(u).map(t=>t.trip_id));
+  const allList = DB.other_expenses.filter(e=>tripIds.has(e.trip_id));
   const raw = _otherExpensesListRows();
   const rows = raw.map(r=>[r[0],r[1],r[2],money(r[3]),r[4],r[5]?fmtDate(r[5]):'']);
-  const sumAmt = raw.filter(r=>r[4]!=='ملغى').reduce((s,r)=>s+Number(r[3]||0),0);
-  const stats = [
-    {label:'عدد المصاريف', value: raw.length},
-    {label:'إجمالي المبالغ (باستثناء المرفوضة)', value: money(sumAmt)},
-  ];
+  const stats = computeOtherExpensesListStats(allList);
   printListReport('قائمة المصاريف الأخرى', '', ['نوع المصروف','الرحلة','المستفيد','المبلغ','الحالة','التاريخ'], rows, stats);
 };
 Views.exportOtherExpensesList = function(){
@@ -1813,11 +1842,28 @@ Views.exportOtherExpensesList = function(){
 };
 
 /* ============================= Users (نفس نمط نظام العهد) ============================= */
+function computeSecondmentsUsersStats(list){
+  const totalTravels = list.reduce((s,x)=>s+userTravelStats(x.user_id).count,0);
+  const totalAmt = list.reduce((s,x)=>s+userTravelStats(x.user_id).amount,0);
+  const stats = [
+    {label:'إجمالي عدد المستخدمين', value: list.length},
+    {label:'إجمالي عدد السفريات', value: totalTravels},
+    {label:'إجمالي المبالغ المعتمدة', value: money(totalAmt)},
+  ];
+  USER_STATUSES.forEach(st=>{
+    const group = list.filter(x=>x.user_status===st);
+    if(!group.length) return;
+    const amt = group.reduce((s,x)=>s+userTravelStats(x.user_id).amount,0);
+    stats.push({label: st, value: money(amt), sub: group.length+' مستخدم'});
+  });
+  return stats;
+}
 Views.users = function(){
   const u = Session.user;
   const list = visibleUsers(u).slice().sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0));
   const addBtn = Perm.canManageUsers(u) ? `<button class="btn btn-primary" onclick="Modals.addUser()">+ إضافة مستخدم</button>` : '';
   const isAud = Perm.isAuditor(u);
+  const statsHTML = statsGridHTML(computeSecondmentsUsersStats(list));
   function rowsFor(items){
     return items.length ? items.map(x=>{
     const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
@@ -1854,6 +1900,7 @@ Views.users = function(){
         ${addBtn}
       </div>
     </div>
+    ${statsHTML}
     <div class="alert alert-info mt-16">المستخدمون الجدد يُضافون تلقائيًا بحالة "تحت المعالجة"، ولا يمكن تفعيلهم إلا من قِبل رئيس الاتحاد أو المدير التنفيذي.</div>
     <div class="mt-16">
       ${isAud ? renderFederationTree(list, x=>x.federation_id, tableFor, items=>statChip('العدد', items.length)) : tableFor(list)}
@@ -1864,15 +1911,7 @@ Views.printUsersList = function(){
   const u = Session.user;
   const list = visibleUsers(u);
   const rows = list.map(x=>{ const s=userTravelStats(x.user_id); return [x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', s.count, money(s.amount), x.user_status||'—']; });
-  const pendingCount = list.filter(x=>x.user_status==='تحت المعالجة').length;
-  const totalTravels = list.reduce((s,x)=>s+userTravelStats(x.user_id).count,0);
-  const totalAmt = list.reduce((s,x)=>s+userTravelStats(x.user_id).amount,0);
-  const stats = [
-    {label:'إجمالي المستخدمين', value: list.length},
-    {label:'بانتظار الاعتماد', value: pendingCount},
-    {label:'إجمالي عدد السفريات', value: totalTravels},
-    {label:'إجمالي المبالغ المعتمدة', value: money(totalAmt)},
-  ];
+  const stats = computeSecondmentsUsersStats(list);
   printListReport('قائمة المستخدمين', '', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows, stats);
 };
 Views.exportUsersList = function(){
