@@ -480,13 +480,15 @@ function exportWorkbook(){
    headers: مصفوفة نصوص لعناوين الأعمدة
    rows: مصفوفة مصفوفات (كل عنصر خلية نصية جاهزة للعرض)
    ========================================================================= */
-function buildListPrintHTML(title, subtitle, headers, rows){
+function buildListPrintHTML(title, subtitle, headers, rows, stats){
   const u = Session.user;
   const fed = federationById(u ? u.federation_id : null);
   const theadHTML = headers.map(h=>`<th>${esc(h)}</th>`).join('');
   const rowsHTML = rows.length
     ? rows.map(r=>`<tr>${r.map(cell=>`<td>${esc(cell===null||cell===undefined?'—':cell)}</td>`).join('')}</tr>`).join('')
     : `<tr><td colspan="${headers.length}"><div class="print-empty">لا توجد بيانات</div></td></tr>`;
+  const statsHTML = (stats && stats.length) ? `<div class="print-balance-strip">${stats.map(s=>`
+    <div class="print-balance-cell"><div class="lbl">${esc(s.label)}</div><div class="val">${esc(String(s.value))}</div></div>`).join('')}</div>` : '';
   return `
   <div class="print-doc">
     <div class="print-header">
@@ -506,6 +508,7 @@ function buildListPrintHTML(title, subtitle, headers, rows){
       <h1 class="print-title">${esc(title)}</h1>
       ${subtitle ? `<div class="print-subtitle">${esc(subtitle)}</div>` : ''}
     </div>
+    ${statsHTML}
     <table class="print-tbl">
       <thead><tr>${theadHTML}</tr></thead>
       <tbody>${rowsHTML}</tbody>
@@ -513,10 +516,10 @@ function buildListPrintHTML(title, subtitle, headers, rows){
     <div class="print-footer-note">تمت الطباعة إلكترونيًا عبر نظام إدارة العهد النقدية</div>
   </div>`;
 }
-function printListReport(title, subtitle, headers, rows){
+function printListReport(title, subtitle, headers, rows, stats){
   let area = document.getElementById('printArea');
   if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
-  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows);
+  area.innerHTML = buildListPrintHTML(title, subtitle, headers, rows, stats);
   setTimeout(()=>window.print(), 80);
 }
 function exportListToExcel(filename, headers, rows){
@@ -995,7 +998,18 @@ Views.printCustodyList = function(){
     const f = custodyFinancials(c);
     return [c.description_ar||'بدون وصف', userLabel(c.received_by_user_id), c.custody_status, money(f.approvedBudget), money(f.totalTransferred), money(f.remainingBalance), f.spentPct+'%', fmtDate(c.Closing_date)];
   });
-  printListReport('قائمة العهد النقدية', DashState.statusFilter!=='all' ? ('الحالة: '+DashState.statusFilter) : '', ['العهدة','صاحب العهدة','الحالة','الميزانية المعتمدة','المحوّل','الرصيد الحالي','نسبة الصرف','تاريخ الإغلاق'], rows);
+  const open = list.filter(c=>c.custody_status==='مفتوحة').length;
+  const pending = list.filter(c=>c.custody_status==='قيد الاعتماد').length;
+  const closed = list.filter(c=>c.custody_status==='مغلقة').length;
+  const totalBalance = list.reduce((s,c)=>s+custodyFinancials(c).remainingBalance,0);
+  const stats = [
+    {label:'إجمالي العهد', value: list.length},
+    {label:'مفتوحة', value: open},
+    {label:'قيد الاعتماد', value: pending},
+    {label:'مغلقة', value: closed},
+    {label:'إجمالي الرصيد الحالي', value: money(totalBalance)},
+  ];
+  printListReport('قائمة العهد النقدية', DashState.statusFilter!=='all' ? ('الحالة: '+DashState.statusFilter) : '', ['العهدة','صاحب العهدة','الحالة','الميزانية المعتمدة','المحوّل','الرصيد الحالي','نسبة الصرف','تاريخ الإغلاق'], rows, stats);
 };
 Views.exportCustodyList = function(){
   const u = Session.user;
@@ -1084,8 +1098,22 @@ function _budgetsListRows(){
   });
 }
 Views.printBudgetsList = function(){
-  const rows = _budgetsListRows().map(r=>[r[0],r[1],r[2],r[3],money(r[4]),r[5],r[6]]);
-  printListReport('قائمة المصاريف التقديرية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], rows);
+  const raw = _budgetsListRows();
+  const rows = raw.map(r=>[r[0],r[1],r[2],r[3],money(r[4]),r[5],r[6]]);
+  const pending = raw.filter(r=>r[5]==='قيد الاعتماد').length;
+  const approved = raw.filter(r=>r[5]==='معتمد').length;
+  const cancelled = raw.filter(r=>r[5]==='ملغى').length;
+  const totalAmt = raw.filter(r=>r[5]!=='ملغى').reduce((s,r)=>s+Number(r[4]||0),0);
+  const approvedAmt = raw.filter(r=>r[5]==='معتمد').reduce((s,r)=>s+Number(r[4]||0),0);
+  const stats = [
+    {label:'إجمالي البنود', value: raw.length},
+    {label:'قيد الاعتماد', value: pending},
+    {label:'معتمدة', value: approved},
+    {label:'ملغاة', value: cancelled},
+    {label:'إجمالي المبلغ', value: money(totalAmt)},
+    {label:'إجمالي المعتمد', value: money(approvedAmt)},
+  ];
+  printListReport('قائمة المصاريف التقديرية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], rows, stats);
 };
 Views.exportBudgetsList = function(){
   exportListToExcel('estimated-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','المبلغ','الحالة','التاريخ'], _budgetsListRows());
@@ -1148,7 +1176,14 @@ Views.printTransfersList = function(){
     const c = DB.custodies.find(x=>x.custody_id===t.custody_id);
     return [c?c.description_ar:'—', userLabel(c?c.received_by_user_id:null), t.statement||'—', money(t.amount), t.currency||'SAR', userLabel(t.created_by), fmtDateTime(t.created_at)];
   });
-  printListReport('قائمة التحويلات', '', ['العهدة','صاحب العهدة','البيان','المبلغ','العملة','بواسطة','التاريخ'], rows);
+  const sumAmt = list.reduce((s,t)=>s+Number(t.amount||0),0);
+  const avgAmt = list.length ? sumAmt/list.length : 0;
+  const stats = [
+    {label:'عدد التحويلات', value: list.length},
+    {label:'إجمالي المحوّل', value: money(sumAmt)},
+    {label:'متوسط التحويل', value: money(avgAmt)},
+  ];
+  printListReport('قائمة التحويلات', '', ['العهدة','صاحب العهدة','البيان','المبلغ','العملة','بواسطة','التاريخ'], rows, stats);
 };
 Views.exportTransfersList = function(){
   const u = Session.user;
@@ -1236,8 +1271,20 @@ function _expensesListRows(){
   });
 }
 Views.printExpensesList = function(){
-  const rows = _expensesListRows().map(r=>[r[0],r[1],r[2],r[3],r[4],money(r[5]),r[6],r[7],r[8]?fmtDate(r[8]):'']);
-  printListReport('قائمة المصاريف الفعلية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], rows);
+  const raw = _expensesListRows();
+  const rows = raw.map(r=>[r[0],r[1],r[2],r[3],r[4],money(r[5]),r[6],r[7],r[8]?fmtDate(r[8]):'']);
+  const pending = raw.filter(r=>r[6]==='غير معتمد').length;
+  const approved = raw.filter(r=>r[6]==='معتمد').length;
+  const cancelled = raw.filter(r=>r[6]==='ملغى').length;
+  const approvedAmt = raw.filter(r=>r[6]==='معتمد').reduce((s,r)=>s+Number(r[5]||0),0);
+  const stats = [
+    {label:'إجمالي المصاريف', value: raw.length},
+    {label:'بانتظار الاعتماد', value: pending},
+    {label:'معتمدة', value: approved},
+    {label:'ملغاة', value: cancelled},
+    {label:'إجمالي المعتمد', value: money(approvedAmt)},
+  ];
+  printListReport('قائمة المصاريف الفعلية', '', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], rows, stats);
 };
 Views.exportExpensesList = function(){
   exportListToExcel('actual-expenses-list', ['العهدة','صاحب العهدة','نوع المصروف','مركز التكلفة','البيان','المبلغ','الحالة','بواسطة','التاريخ'], _expensesListRows());
@@ -2497,7 +2544,16 @@ Views.printUsersList = function(){
   const u = Session.user;
   const list = visibleUsers(u);
   const rows = list.map(x=>[x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', money(userOpenBalance(x.user_id)), x.user_status||'—']);
-  printListReport('قائمة المستخدمين', '', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows);
+  const pendingCount = list.filter(x=>x.user_status==='تحت المعالجة').length;
+  const openCount = list.filter(x=>x.user_status==='مفتوح').length;
+  const totalBalance = list.reduce((s,x)=>s+userOpenBalance(x.user_id),0);
+  const stats = [
+    {label:'إجمالي المستخدمين', value: list.length},
+    {label:'مفعّلون', value: openCount},
+    {label:'بانتظار الاعتماد', value: pendingCount},
+    {label:'إجمالي الرصيد المفتوح', value: money(totalBalance)},
+  ];
+  printListReport('قائمة المستخدمين', '', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows, stats);
 };
 Views.exportUsersList = function(){
   const u = Session.user;
