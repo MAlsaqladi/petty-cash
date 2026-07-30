@@ -10,9 +10,9 @@
 const Auth = (function(){
   const KEY = 'cs_session_v1';
 
-  function saveSession(user){
+  function saveSession(user, token){
     try{
-      sessionStorage.setItem(KEY, JSON.stringify({ user, ts: Date.now() }));
+      sessionStorage.setItem(KEY, JSON.stringify({ user, token, ts: Date.now() }));
     }catch(e){ /* تجاهل — بعض المتصفحات في وضع خاص قد تمنع sessionStorage */ }
   }
 
@@ -25,6 +25,15 @@ const Auth = (function(){
     }catch(e){ return null; }
   }
 
+  function readToken(){
+    try{
+      const raw = sessionStorage.getItem(KEY);
+      if(!raw) return null;
+      const parsed = JSON.parse(raw);
+      return (parsed && parsed.token) ? parsed.token : null;
+    }catch(e){ return null; }
+  }
+
   function clearSession(){
     try{ sessionStorage.removeItem(KEY); }catch(e){}
   }
@@ -33,5 +42,5 @@ const Auth = (function(){
     window.location.href = 'login.html';
   }
 
-  return { saveSession, readSession, clearSession, goToLogin, KEY };
+  return { saveSession, readSession, readToken, clearSession, goToLogin, KEY };
 })();

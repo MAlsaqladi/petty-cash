@@ -146,10 +146,10 @@ async function doLogin(){
     return;
   }
   btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-  const { data, error } = await apiCall({ op:'rpc', fn:'login', args:{ p_username: username, p_password: password } });
+  const { data, token, error } = await apiCall({ op:'rpc', fn:'login', args:{ p_username: username, p_password: password } });
   btn.disabled = false; btn.textContent = 'تسجيل الدخول';
   if(error){
-    alertEl.innerHTML = `<div class="alert alert-danger">تعذّر الاتصال بقاعدة البيانات: ${esc(error.message)}</div>`;
+    alertEl.innerHTML = `<div class="alert alert-danger">${esc(error.message)}</div>`;
     return;
   }
   const u = (data && data[0]) ? data[0] : null;
@@ -166,7 +166,7 @@ async function doLogin(){
     alertEl.innerHTML = `<div class="alert alert-warning">${esc(msgs[u.user_status] || 'الحساب غير مفعّل حاليًا.')}</div>`;
     return;
   }
-  Auth.saveSession(u);
+  Auth.saveSession(u, token);
   window.location.href = SYSTEM_TARGETS[chosenSystem];
 }
 
@@ -184,8 +184,9 @@ async function boot(){
   }
   // تحقّق سريع وخفيف من وجود مستخدمين في قاعدة البيانات (لإظهار تنبيه للمعدّ الأول فقط)
   try{
-    const { data, error } = await apiCall({ op:'select', table:'users_public' });
-    if(!error && data && data.length===0){
+    const res = await fetch('/api/has-users');
+    const { hasUsers } = await res.json();
+    if(hasUsers === false){
       document.getElementById('noUsersNotice').innerHTML = `<div class="demo-box mt-16">
         <div style="font-weight:800;margin-bottom:6px;">⚠️ لا يوجد مستخدمون في قاعدة البيانات بعد.</div>
         <div class="small muted">أضف أول مستخدم (رئيس اتحاد) مباشرة من Supabase عبر SQL Editor أو Table Editor → جدول users. راجع تعليمات README لأمر SQL جاهز.</div>

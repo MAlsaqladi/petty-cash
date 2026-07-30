@@ -155,8 +155,9 @@ function toast(msg, kind){
 /* ---------------------------- Server layer ---------------------------- */
 async function apiCall(body){
   let res;
-  try{ res = await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+  try{ res = await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(Auth.readToken()||'')}, body: JSON.stringify(body) }); }
   catch(e){ return { data:null, error:{ message:'تعذّر الاتصال بالخادم.' } }; }
+  if(res.status === 401){ Auth.clearSession(); Auth.goToLogin(); return { data:null, error:{ message:'انتهت الجلسة، الرجاء تسجيل الدخول من جديد.' } }; }
   try{ return await res.json(); }
   catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم' } }; }
 }
@@ -207,15 +208,17 @@ async function dbUpdateUser(userId, patch){
 async function apiUpload(file, folder){
   const fd = new FormData(); fd.append('file', file); fd.append('folder', folder);
   let res;
-  try{ res = await fetch('/api/upload', { method:'POST', body: fd }); }
+  try{ res = await fetch('/api/upload', { method:'POST', headers:{'Authorization':'Bearer '+(Auth.readToken()||'')}, body: fd }); }
   catch(e){ return { data:null, error:{ message:'تعذّر رفع الملف' } }; }
+  if(res.status === 401){ Auth.clearSession(); Auth.goToLogin(); return { data:null, error:{ message:'انتهت الجلسة' } }; }
   try{ return await res.json(); } catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة أثناء الرفع' } }; }
 }
 async function viewAttachment(filePath){
   if(!filePath){ toast('لا يوجد مرفق','danger'); return; }
   let res;
-  try{ res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path:filePath }) }); }
+  try{ res = await fetch('/api/file-url', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(Auth.readToken()||'')}, body: JSON.stringify({ path:filePath }) }); }
   catch(e){ toast('تعذّر الاتصال بالخادم','danger'); return; }
+  if(res.status === 401){ Auth.clearSession(); Auth.goToLogin(); return; }
   let json; try{ json = await res.json(); } catch(e){ toast('استجابة غير متوقعة','danger'); return; }
   if(json.error){ toast('تعذّر فتح المرفق: '+json.error.message,'danger'); return; }
   window.open(json.data.url, '_blank');

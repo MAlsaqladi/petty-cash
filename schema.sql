@@ -148,7 +148,15 @@ create or replace view users_public as
          "Job_Title", language, created_at, created_by
   from users;
 
--- دالة تسجيل الدخول: تتحقق من اسم المستخدم وكلمة المرور وتُرجع بيانات المستخدم بدون كلمة المرور
+-- دالة مساعدة يستخدمها الخادم (server.js) لتشفير كلمة مرور جديدة عند إنشاء مستخدم
+create or replace function hash_password(p text)
+returns text
+language sql
+security definer
+set search_path = public
+as $$ select crypt(p, gen_salt('bf')); $$;
+
+-- دالة تسجيل الدخول: تتحقق من اسم المستخدم وكلمة المرور (مقارنة تجزئة bcrypt) وتُرجع بيانات المستخدم بدون كلمة المرور
 create or replace function login(p_username text, p_password text)
 returns setof users_public
 language plpgsql security definer
@@ -160,11 +168,11 @@ begin
            u.national_id, u.nationality, u.phone, u.email, u.user_name, u.user_type,
            u."Job_Title", u.language, u.created_at, u.created_by
     from users u
-    where u.user_name = p_username and u.password = p_password;
+    where u.user_name = p_username and u.password = crypt(p_password, u.password);
 end;
 $$;
 
--- دالة تغيير كلمة المرور: تتحقق من القديمة قبل التحديث، ولا تكشف كلمة المرور الحالية أبدًا
+-- دالة تغيير كلمة المرور: تتحقق من القديمة (تجزئة) قبل التحديث، وتخزّن الجديدة مشفّرة دائمًا
 create or replace function change_password(p_user_id text, p_old_password text, p_new_password text)
 returns boolean
 language plpgsql security definer
@@ -173,11 +181,11 @@ as $$
 declare
   v_match boolean;
 begin
-  select (password = p_old_password) into v_match from users where user_id = p_user_id;
+  select (password = crypt(p_old_password, password)) into v_match from users where user_id = p_user_id;
   if v_match is not true then
     return false;
   end if;
-  update users set password = p_new_password where user_id = p_user_id;
+  update users set password = crypt(p_new_password, gen_salt('bf')) where user_id = p_user_id;
   return true;
 end;
 $$;
@@ -210,6 +218,7 @@ alter table custody_closures enable row level security;
 grant select on users_public to service_role;
 grant execute on function login(text, text) to service_role;
 grant execute on function change_password(text, text, text) to service_role;
+grant execute on function hash_password(text) to service_role;
 
 -- ---------------------------------------------------------------------
 -- تخزين المرفقات (صور/ملفات PDF للتحويلات والمصاريف)
