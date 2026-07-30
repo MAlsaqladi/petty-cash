@@ -347,6 +347,30 @@ async function apiCall(body){
     return { data: null, error: { message: 'استجابة غير متوقعة من الخادم (رمز الحالة: '+res.status+')' } };
   }
 }
+/* استدعاء إجراء حسّاس (اعتماد/رفض/إقفال/تغيير حالة) — يُعاد التحقق من الصلاحية
+   بالكامل على الخادم، ويُسجَّل بسجل التدقيق دائمًا (نجح أو فشل) */
+async function apiAction(action, params){
+  let res;
+  try{
+    res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (Auth.readToken()||'') },
+      body: JSON.stringify({ action, ...params })
+    });
+  }catch(e){
+    return { data: null, error: { message: 'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت.' } };
+  }
+  if(res.status === 401){
+    Auth.clearSession();
+    Auth.goToLogin();
+    return { data: null, error: { message: 'انتهت الجلسة، الرجاء تسجيل الدخول من جديد.' } };
+  }
+  try{
+    return await res.json();
+  }catch(e){
+    return { data: null, error: { message: 'استجابة غير متوقعة من الخادم (رمز الحالة: '+res.status+')' } };
+  }
+}
 
 /* جدول القراءة لـ users يذهب دائمًا عبر "users_public" (بدون كلمة المرور) */
 const READ_SOURCE = { users: 'users_public' };
@@ -627,6 +651,12 @@ App.syncData = async function(){
     if(btn){ btn.disabled = false; btn.textContent = '🔄 مزامنة'; }
   }
 };
+/* بعد أي إجراء حسّاس (اعتماد/رفض/إقفال) على الخادم، نعيد تحميل البيانات كاملة
+   بدل محاولة تعديل الحالة المحلية يدويًا — أضمن وأبسط، خصوصًا للإجراءات التي
+   تُحدّث أكثر من سجل دفعة واحدة (مثل اعتماد عهدة يعتمد بنود ميزانيتها أيضًا). */
+async function refreshAfterAction(){
+  try{ DB = await loadAllData(); }catch(e){ /* سيظهر أي خطأ اتصال فعلي بأول عملية تالية */ }
+}
 
 /* ---------------------------- Sidebar / navigation ---------------------------- */
 const ICONS = {
@@ -2122,14 +2152,9 @@ Actions.approveCustodyRequest = async function(custodyId){
   }
   const budgets = DB.custody_budgets.filter(b=>b.custody_id===custodyId);
   if(!budgets.length){ toast('لا يمكن الاعتماد قبل إضافة مصاريف تقديرية','danger'); return; }
-  const patch = { custody_status:'مفتوحة', request_approved_by:u.user_id, request_approval_date: nowISO() };
-  const savedCustody = await dbUpdate('custodies','custody_id',custodyId, patch);
-  if(!savedCustody) return;
-  for(const b of budgets){
-    if(b.Record_Status==='قيد الاعتماد'){
-      await dbUpdate('custody_budgets','budget_id', b.budget_id, { Record_Status:'معتمد', approved_by:u.user_id, approved_at: nowISO() });
-    }
-  }
+  const { error } = await apiAction('approveCustodyRequest', { custodyId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم اعتماد طلب العهدة','success');
   App.render();
 };
@@ -2139,8 +2164,9 @@ Actions.rejectCustodyRequest = async function(custodyId){
   const u = Session.user;
   if(!Perm.canApproveCustodyRequestFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية الرفض','danger'); return; }
   if(!confirm('هل أنت متأكد من رفض طلب العهدة؟')) return;
-  const saved = await dbUpdate('custodies','custody_id',custodyId, { custody_status:'مرفوضة', request_approved_by:u.user_id, request_approval_date: nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('rejectCustodyRequest', { custodyId });
+  if(error){ toast('تعذّر الرفض: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم رفض طلب العهدة', 'success');
   App.go('dashboard');
 };
@@ -2152,8 +2178,9 @@ Actions.approveBudgetLine = async function(custodyId, budgetId){
   if(c.custody_status!=='مفتوحة'){ toast('لا يمكن اعتماد بند إلا لعهدة مفتوحة','danger'); return; }
   const b = DB.custody_budgets.find(x=>x.budget_id===budgetId);
   if(!b || b.Record_Status==='معتمد') return;
-  const saved = await dbUpdate('custody_budgets','budget_id',budgetId, { Record_Status:'معتمد', approved_by:u.user_id, approved_at: nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('approveBudgetLine', { custodyId, budgetId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم اعتماد بند المصروف التقديري — تحقق من الحاجة لتحويل رصيد إضافي','success');
   App.render();
 };
@@ -2181,15 +2208,11 @@ Actions.saveTransfer = async function(custodyId){
     filePath = up.data.path;
     if(saveBtn){ saveBtn.textContent = 'جارٍ الحفظ…'; }
   }
-  const saved = await dbInsert('custody_transfers', {
-    transfer_id: uid('trf'), federation_id:c.federation_id, transfer_status:'مكتمل', user_id:c.received_by_user_id,
-    custody_id: custodyId, statement: note, currency:cur, foreign_amount: cur==='SAR'?null:amt, exchange_rate: 1,
-    amount: amt, file: filePath, created_at: nowISO(), created_by: u.user_id, approved_by:u.user_id, approved_at: nowISO()
+  const saved = await apiAction('saveTransfer', {
+    custodyId, amount: amt, currency: cur, note, filePath
   });
-  if(!saved) return;
-  const newBalance = Number(c.Custody_balance||0) + amt;
-  const savedCustody = await dbUpdate('custodies','custody_id',custodyId, { Custody_balance: newBalance });
-  if(!savedCustody) return;
+  if(saved.error){ toast('تعذّر تنفيذ التحويل: ' + saved.error.message, 'danger'); if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='تنفيذ التحويل'; } return; }
+  await refreshAfterAction();
   closeModal();
   toast('تم تنفيذ التحويل بنجاح','success');
   App.render();
@@ -2241,8 +2264,9 @@ Actions.approveExpense = async function(custodyId, closureId){
   const c = DB.custodies.find(x=>x.custody_id===custodyId);
   const u = Session.user;
   if(!Perm.canApproveExpenseFor(u,c) || c.federation_id!==u.federation_id){ toast('لا تملك صلاحية اعتماد المصروف','danger'); return; }
-  const saved = await dbUpdate('custody_closures','closure_id',closureId, { disbursement_status:'معتمد', approved_by:u.user_id, approved_at: nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('approveExpense', { custodyId, closureId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم اعتماد المصروف','success');
   App.render();
 };
@@ -2255,10 +2279,9 @@ Actions.closeCustody = async function(custodyId){
   if(!(f.remainingBalance===0 && f.pendingExpenseCount===0 && f.approvedExpenses>0)){ toast('لا يمكن إقفال العهدة قبل تسوية الرصيد بالكامل','danger'); return; }
   if(f.pendingBudgetLines.length>0){ toast('لا يمكن الإقفال قبل اعتماد أو إلغاء كل بنود المصاريف التقديرية المعلّقة','danger'); return; }
   if(!confirm('هل تريد تأكيد إقفال هذه العهدة نهائيًا؟')) return;
-  const saved = await dbUpdate('custodies','custody_id',custodyId, {
-    custody_status:'مغلقة', Closing_date: nowISO(), closure_approved_by: u.user_id, closure_approval_date: nowISO()
-  });
-  if(!saved) return;
+  const { error } = await apiAction('closeCustody', { custodyId });
+  if(error){ toast('تعذّر الإقفال: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم إقفال العهدة بنجاح','success');
   App.render();
 };
@@ -2270,8 +2293,9 @@ Actions.cancelBudgetLine = async function(custodyId, budgetId){
   const b = DB.custody_budgets.find(x=>x.budget_id===budgetId);
   if(!b || b.Record_Status!=='قيد الاعتماد') return;
   if(!confirm('هل تريد إلغاء هذا البند؟ لن يتم احتسابه ضمن إجمالي المصاريف التقديرية.')) return;
-  const saved = await dbUpdate('custody_budgets','budget_id',budgetId, { Record_Status:'ملغى' });
-  if(!saved) return;
+  const { error } = await apiAction('cancelBudgetLine', { custodyId, budgetId });
+  if(error){ toast('تعذّر الإلغاء: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم إلغاء البند','success');
   App.render();
 };
@@ -2879,8 +2903,9 @@ Actions.changeUserStatus = async function(userId, newStatus){
   const u = Session.user;
   const target = DB.users.find(x=>x.user_id===userId);
   if(!Perm.canChangeUserStatus(u) || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
-  const saved = await dbUpdateUser(userId, { user_status: newStatus });
-  if(!saved) return;
+  const { error } = await apiAction('changeUserStatus', { userId, newStatus });
+  if(error){ toast('تعذّر تحديث الحالة: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم تحديث حالة المستخدم إلى: ' + newStatus, 'success');
   App.render();
 };

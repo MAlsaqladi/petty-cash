@@ -162,6 +162,353 @@ async function loadCurrentUser(uid) {
   return data;
 }
 
+/* يتحقق من رمز الجلسة في رأس الطلب ويُرجع بيانات المستخدم الحالية، أو null إن كانت غير صالحة */
+async function authenticateRequest(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const claims = verifyToken(token);
+  if (!claims) return null;
+  return await loadCurrentUser(claims.uid);
+}
+
+/* -------------------------------------------------------------------
+   سجل التدقيق — يسجّل كل محاولة إجراء حسّاس (اعتماد/رفض/إقفال/تغيير حالة)
+   سواء نجحت أو فشلت. لا يُفشل الطلب الأصلي أبدًا حتى لو تعذّر التسجيل.
+   ------------------------------------------------------------------- */
+async function logAudit({ user, action, success, targetTable, targetId, message, ip }) {
+  try {
+    await supabase.from('audit_log').insert({
+      user_id: user ? user.user_id : null,
+      user_name: user ? (user.employee_name_ar || user.user_name) : null,
+      federation_id: user ? user.federation_id : null,
+      action, success,
+      target_table: targetTable || null,
+      target_id: targetId || null,
+      message: message || null,
+      ip: ip || null,
+    });
+  } catch (e) {
+    console.error('تعذّر تسجيل سجل التدقيق:', e.message || e);
+  }
+}
+
+/* خطأ يحمل رمز حالة HTTP مناسب، يُستخدم داخل معالجات الإجراءات */
+class ActionError extends Error {
+  constructor(message, status) { super(message); this.status = status || 400; }
+}
+
+/* ---------------------------- نسخة خادم من منطق الصلاحيات (Perm) ----------------------------
+   يجب أن تطابق تمامًا منطق كائن Perm في index.html و secondments.html — أي تعديل هناك
+   يلزمه تعديل مقابل هنا. */
+const SPerm = {
+  isAuditor: u => u && u.user_type === 'مراجع',
+  isPresident: u => u && u.user_type === 'رئيس الاتحاد',
+  isExec: u => u && u.user_type === 'مدير تنفيذي',
+  isAccountant: u => u && u.user_type === 'محاسب',
+  isEmployee: u => u && u.user_type === 'موظف',
+  isHR: u => u && u.user_type === 'موارد بشرية',
+  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
+  isBasicStaff: u => SPerm.isEmployee(u) || SPerm.isHR(u),
+  isTopApprover: u => SPerm.isPresident(u) || SPerm.isExec(u),
+};
+
+async function getRow(table, pkField, id) {
+  const { data, error } = await supabase.from(table).select('*').eq(pkField, id).single();
+  if (error || !data) return null;
+  return data;
+}
+async function getRows(table, filters) {
+  let q = supabase.from(table).select('*');
+  for (const [k, v] of Object.entries(filters)) q = q.eq(k, v);
+  const { data, error } = await q;
+  if (error) return [];
+  return data || [];
+}
+async function updateRow(table, pkField, id, patch) {
+  const { error } = await supabase.from(table).update(patch).eq(pkField, id);
+  if (error) throw new ActionError(error.message, 500);
+}
+async function insertRow(table, payload) {
+  const { data, error } = await supabase.from(table).insert(payload).select().single();
+  if (error) throw new ActionError(error.message, 500);
+  return data;
+}
+const nowISO = () => new Date().toISOString();
+
+/* -------- منطق العهد: يطابق custodyFinancials في index.html تمامًا -------- */
+function computeCustodyFinancials(c, budgets, transfers, expenses) {
+  const approvedBudget = budgets.filter(b => b.Record_Status === 'معتمد').reduce((s, b) => s + Number(b.estimated_amount || 0), 0);
+  const pendingBudgetLines = budgets.filter(b => b.Record_Status === 'قيد الاعتماد');
+  const totalTransferred = transfers.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const approvedExpenses = expenses.filter(e => e.disbursement_status === 'معتمد').reduce((s, e) => s + Number(e.amount || 0), 0);
+  const pendingExpenses = expenses.filter(e => e.disbursement_status === 'غير معتمد').reduce((s, e) => s + Number(e.amount || 0), 0);
+  const pendingExpenseCount = expenses.filter(e => e.disbursement_status === 'غير معتمد').length;
+  const opening = Number(c.Opening_balance || 0);
+  const fundsAvailable = opening + totalTransferred;
+  const remainingBalance = fundsAvailable - approvedExpenses;
+  const availableToSpend = remainingBalance - pendingExpenses;
+  const pendingTransfer = Math.max(0, approvedBudget - fundsAvailable);
+  return { approvedBudget, pendingBudgetLines, totalTransferred, approvedExpenses, pendingExpenses, pendingExpenseCount, fundsAvailable, remainingBalance, availableToSpend, pendingTransfer };
+}
+/* لو صاحب العهدة رئيس الاتحاد أو المدير التنفيذي، يعتمد/يقفل طرف آخر مستقل تجنبًا لتعارض المصالح */
+function requiredApproverOverride(holder) {
+  if (!holder) return null;
+  if (holder.user_type === 'مدير تنفيذي') return 'isPresident';
+  if (holder.user_type === 'رئيس الاتحاد') return 'isExec';
+  return null;
+}
+function overrideAllows(ov, user) {
+  if (ov === 'isPresident') return SPerm.isPresident(user);
+  if (ov === 'isExec') return SPerm.isExec(user);
+  return null; // لا يوجد تعارض مصالح
+}
+/* لو المشارك بالانتداب نفسه رئيس الاتحاد أو المدير التنفيذي، يوافق عليه الطرف الآخر حصرًا */
+function canApproveParticipantRecord(user, participant, participantUser) {
+  if (!SPerm.isTopApprover(user)) return false;
+  const pType = participantUser ? participantUser.user_type : participant.user_type;
+  if (pType === 'رئيس الاتحاد') return SPerm.isExec(user);
+  if (pType === 'مدير تنفيذي') return SPerm.isPresident(user);
+  return true;
+}
+/* لو المستفيد من مصروف آخر هو رئيس الاتحاد أو المدير التنفيذي، يعتمدها الطرف الآخر حصرًا */
+function canApproveOtherExpenseFor(user, expense) {
+  const bens = expense && expense.beneficiary ? expense.beneficiary.split(/[،,]\s*/) : [];
+  const hasExec = bens.includes('مدير تنفيذي');
+  const hasPres = bens.includes('رئيس الاتحاد');
+  if (hasExec && !hasPres) return SPerm.isPresident(user);
+  if (hasPres && !hasExec) return SPerm.isExec(user);
+  return SPerm.isTopApprover(user);
+}
+const USER_STATUS_VALUES = new Set(['مفتوح', 'مغلق', 'تحت المعالجة', 'مسودة']);
+
+/* =========================================================================
+   سجل الإجراءات الحسّاسة — كل واحد منها يُعيد التحقق الكامل من الصلاحية على
+   الخادم مباشرة (وليس فقط بالواجهة)، باستخدام بيانات المستخدم المُتحقَّقة من
+   الجلسة، ويفرض القيم الحسّاسة (approved_by/created_by...) من الخادم دائمًا.
+   ========================================================================= */
+const ACTIONS = {
+
+  async approveCustodyRequest({ user }, { custodyId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    if (c.custody_status !== 'قيد الاعتماد') throw new ActionError('العهدة ليست بانتظار الاعتماد', 400);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    const allowed = ov ? overrideAllows(ov, user) : SPerm.isTopApprover(user);
+    if (!allowed) throw new ActionError(ov ? `لا تملك صلاحية الاعتماد — هذه العهدة تتطلب اعتماد ${ov === 'isPresident' ? 'رئيس الاتحاد' : 'المدير التنفيذي'} تجنبًا لتعارض المصالح` : 'لا تملك صلاحية الاعتماد', 403);
+    const budgets = await getRows('custody_budgets', { custody_id: custodyId });
+    if (!budgets.length) throw new ActionError('لا يمكن الاعتماد قبل إضافة مصاريف تقديرية', 400);
+    await updateRow('custodies', 'custody_id', custodyId, { custody_status: 'مفتوحة', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    for (const b of budgets) {
+      if (b.Record_Status === 'قيد الاعتماد') {
+        await updateRow('custody_budgets', 'budget_id', b.budget_id, { Record_Status: 'معتمد', approved_by: user.user_id, approved_at: nowISO() });
+      }
+    }
+    return { targetTable: 'custodies', targetId: custodyId, message: 'تم اعتماد طلب العهدة' };
+  },
+
+  async rejectCustodyRequest({ user }, { custodyId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    if (c.custody_status !== 'قيد الاعتماد') throw new ActionError('العهدة ليست بانتظار الاعتماد', 400);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    const allowed = ov ? overrideAllows(ov, user) : SPerm.isTopApprover(user);
+    if (!allowed) throw new ActionError('لا تملك صلاحية الرفض', 403);
+    await updateRow('custodies', 'custody_id', custodyId, { custody_status: 'مرفوضة', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    return { targetTable: 'custodies', targetId: custodyId, message: 'تم رفض طلب العهدة' };
+  },
+
+  async approveBudgetLine({ user }, { custodyId, budgetId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    const allowed = ov ? overrideAllows(ov, user) : SPerm.isTopApprover(user);
+    if (!allowed) throw new ActionError('لا تملك صلاحية اعتماد بند المصروف التقديري', 403);
+    if (c.custody_status !== 'مفتوحة') throw new ActionError('لا يمكن اعتماد بند إلا لعهدة مفتوحة', 400);
+    const b = await getRow('custody_budgets', 'budget_id', budgetId);
+    if (!b || b.custody_id !== custodyId) throw new ActionError('البند غير موجود', 404);
+    if (b.Record_Status === 'معتمد') throw new ActionError('البند معتمد بالفعل', 400);
+    await updateRow('custody_budgets', 'budget_id', budgetId, { Record_Status: 'معتمد', approved_by: user.user_id, approved_at: nowISO() });
+    return { targetTable: 'custody_budgets', targetId: budgetId, message: 'تم اعتماد بند المصروف التقديري' };
+  },
+
+  async cancelBudgetLine({ user }, { custodyId, budgetId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    const allowed = ov ? overrideAllows(ov, user) : SPerm.isTopApprover(user);
+    if (!allowed) throw new ActionError('لا تملك صلاحية إلغاء بند المصروف التقديري', 403);
+    const b = await getRow('custody_budgets', 'budget_id', budgetId);
+    if (!b || b.custody_id !== custodyId || b.Record_Status !== 'قيد الاعتماد') throw new ActionError('لا يمكن إلغاء هذا البند', 400);
+    await updateRow('custody_budgets', 'budget_id', budgetId, { Record_Status: 'ملغى' });
+    return { targetTable: 'custody_budgets', targetId: budgetId, message: 'تم إلغاء البند' };
+  },
+
+  async saveTransfer({ user }, { custodyId, amount, currency, note, filePath }) {
+    if (!SPerm.isAccountant(user)) throw new ActionError('لا تملك صلاحية التحويل', 403);
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    if (c.custody_status !== 'مفتوحة') throw new ActionError('لا يمكن التحويل إلا لعهدة مفتوحة', 400);
+    if (user.user_id === c.request_approved_by) throw new ActionError('لا يمكن لمعتمد طلب العهدة تنفيذ التحويل', 403);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) throw new ActionError('أدخل مبلغًا صحيحًا', 400);
+    if (!filePath) throw new ActionError('يجب إرفاق صورة أو ملف PDF لإثبات التحويل', 400);
+    const budgets = await getRows('custody_budgets', { custody_id: custodyId });
+    const transfers = await getRows('custody_transfers', { custody_id: custodyId });
+    const f = computeCustodyFinancials(c, budgets, transfers, []);
+    if (amt > f.pendingTransfer + 0.009) throw new ActionError('المبلغ يتجاوز المصاريف التقديرية المعتمدة', 400);
+    const cur = currency || 'SAR';
+    const saved = await insertRow('custody_transfers', {
+      transfer_id: 'trf_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+      federation_id: c.federation_id, transfer_status: 'مكتمل', user_id: c.received_by_user_id,
+      custody_id: custodyId, statement: note || '', currency: cur, foreign_amount: cur === 'SAR' ? null : amt, exchange_rate: 1,
+      amount: amt, file: filePath, created_at: nowISO(), created_by: user.user_id, approved_by: user.user_id, approved_at: nowISO(),
+    });
+    const newBalance = Number(c.Custody_balance || 0) + amt;
+    await updateRow('custodies', 'custody_id', custodyId, { Custody_balance: newBalance });
+    return { targetTable: 'custody_transfers', targetId: saved.transfer_id, message: 'تم تنفيذ التحويل بنجاح', data: saved };
+  },
+
+  async approveExpense({ user }, { custodyId, closureId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    let allowed;
+    if (ov) allowed = overrideAllows(ov, user);
+    else if (SPerm.isAccountant(user) && user.user_id === c.received_by_user_id) allowed = SPerm.isExec(user);
+    else allowed = SPerm.isAccountant(user) || SPerm.isExec(user);
+    if (!allowed) throw new ActionError('لا تملك صلاحية اعتماد المصروف', 403);
+    const e = await getRow('custody_closures', 'closure_id', closureId);
+    if (!e || e.custody_id !== custodyId) throw new ActionError('المصروف غير موجود', 404);
+    if (e.disbursement_status !== 'غير معتمد') throw new ActionError('المصروف تمت معالجته بالفعل', 400);
+    await updateRow('custody_closures', 'closure_id', closureId, { disbursement_status: 'معتمد', approved_by: user.user_id, approved_at: nowISO() });
+    return { targetTable: 'custody_closures', targetId: closureId, message: 'تم اعتماد المصروف' };
+  },
+
+  async closeCustody({ user }, { custodyId }) {
+    const c = await getRow('custodies', 'custody_id', custodyId);
+    if (!c || c.federation_id !== user.federation_id) throw new ActionError('العهدة غير موجودة', 404);
+    const holder = c.received_by_user_id ? await getRow('users_public', 'user_id', c.received_by_user_id) : null;
+    const ov = requiredApproverOverride(holder);
+    const allowed = ov ? overrideAllows(ov, user) : SPerm.isTopApprover(user);
+    if (!allowed) throw new ActionError('لا تملك صلاحية إقفال العهدة', 403);
+    const budgets = await getRows('custody_budgets', { custody_id: custodyId });
+    const transfers = await getRows('custody_transfers', { custody_id: custodyId });
+    const expenses = await getRows('custody_closures', { custody_id: custodyId });
+    const f = computeCustodyFinancials(c, budgets, transfers, expenses);
+    if (!(f.remainingBalance === 0 && f.pendingExpenseCount === 0 && f.approvedExpenses > 0)) throw new ActionError('لا يمكن إقفال العهدة قبل تسوية الرصيد بالكامل', 400);
+    if (f.pendingBudgetLines.length > 0) throw new ActionError('لا يمكن الإقفال قبل اعتماد أو إلغاء كل بنود المصاريف التقديرية المعلّقة', 400);
+    await updateRow('custodies', 'custody_id', custodyId, { custody_status: 'مغلقة', Closing_date: nowISO(), closure_approved_by: user.user_id, closure_approval_date: nowISO() });
+    return { targetTable: 'custodies', targetId: custodyId, message: 'تم إقفال العهدة بنجاح' };
+  },
+
+  async changeUserStatus({ user }, { userId, newStatus }) {
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية تغيير الحالة', 403);
+    if (!USER_STATUS_VALUES.has(newStatus)) throw new ActionError('حالة غير صالحة', 400);
+    const target = await getRow('users_public', 'user_id', userId);
+    if (!target || target.federation_id !== user.federation_id) throw new ActionError('المستخدم غير موجود', 404);
+    await updateRow('users', 'user_id', userId, { user_status: newStatus });
+    return { targetTable: 'users', targetId: userId, message: 'تم تحديث حالة المستخدم إلى: ' + newStatus };
+  },
+
+  async approveTripAssignment({ user }, { tripId }) {
+    const t = await getRow('trips', 'trip_id', tripId);
+    if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية الاعتماد', 403);
+    if (t.trip_status !== 'طلب') throw new ActionError('الرحلة ليست بانتظار الاعتماد', 400);
+    const participants = await getRows('delegations', { trip_id: tripId });
+    const ownRecord = participants.find(p => p.user_id === user.user_id);
+    if (ownRecord && ownRecord.delegations_status === 'غير معتمد') {
+      const other = SPerm.isPresident(user) ? 'المدير التنفيذي' : 'رئيس الاتحاد';
+      throw new ActionError(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للاعتماد`, 403);
+    }
+    await updateRow('trips', 'trip_id', tripId, { trip_status: 'قيد الصرف', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    const pending = participants.filter(p => p.delegations_status === 'غير معتمد');
+    let approvedCount = 0;
+    for (const p of pending) {
+      const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
+      if (canApproveParticipantRecord(user, p, pUser)) {
+        await updateRow('delegations', 'delegation_id', p.delegation_id, { delegations_status: 'معتمد', request_approved_by: user.user_id, request_approval_date: nowISO() });
+        approvedCount++;
+      }
+    }
+    const remaining = pending.length - approvedCount;
+    return { targetTable: 'trips', targetId: tripId, message: `تم اعتماد التكليف${approvedCount ? ` واعتماد ${approvedCount} مشارك` : ''}${remaining ? ` — ${remaining} مشارك بحاجة لموافقة مستقلة` : ''}` };
+  },
+
+  async rejectTrip({ user }, { tripId }) {
+    const t = await getRow('trips', 'trip_id', tripId);
+    if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية الرفض', 403);
+    if (t.trip_status !== 'طلب') throw new ActionError('الرحلة ليست بانتظار الاعتماد', 400);
+    const participants = await getRows('delegations', { trip_id: tripId });
+    const ownRecord = participants.find(p => p.user_id === user.user_id);
+    if (ownRecord && ownRecord.delegations_status === 'غير معتمد') {
+      const other = SPerm.isPresident(user) ? 'المدير التنفيذي' : 'رئيس الاتحاد';
+      throw new ActionError(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للبت في الطلب`, 403);
+    }
+    await updateRow('trips', 'trip_id', tripId, { trip_status: 'مرفوضة' });
+    return { targetTable: 'trips', targetId: tripId, message: 'تم رفض طلب الرحلة' };
+  },
+
+  async closeTrip({ user }, { tripId, achieved }) {
+    const t = await getRow('trips', 'trip_id', tripId);
+    if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية الإقفال', 403);
+    const participants = await getRows('delegations', { trip_id: tripId });
+    const otherExpenses = await getRows('other_expenses', { trip_id: tripId });
+    const pendingP = participants.filter(p => p.delegations_status === 'غير معتمد').length;
+    const pendingE = otherExpenses.filter(e => e.expense_status === 'غير معتمد').length;
+    if (pendingP > 0 || pendingE > 0) throw new ActionError('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المشاركين والمصاريف الأخرى المعلّقة', 400);
+    const achievedText = (achieved || '').trim();
+    if (!achievedText) throw new ActionError('الرجاء تسجيل الأهداف المحققة قبل الإقفال', 400);
+    await updateRow('trips', 'trip_id', tripId, { trip_status: 'مغلقة', achieved_results: achievedText, closure_approved_by: user.user_id, closure_approval_date: nowISO() });
+    return { targetTable: 'trips', targetId: tripId, message: 'تم إقفال الرحلة' };
+  },
+
+  async approveParticipant({ user }, { delegationId }) {
+    const p = await getRow('delegations', 'delegation_id', delegationId);
+    if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
+    const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
+    if (!canApproveParticipantRecord(user, p, pUser)) throw new ActionError('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)', 403);
+    if (p.delegations_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المشارك بالفعل', 400);
+    await updateRow('delegations', 'delegation_id', delegationId, { delegations_status: 'معتمد', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    return { targetTable: 'delegations', targetId: delegationId, message: 'تم اعتماد المشارك' };
+  },
+
+  async rejectParticipant({ user }, { delegationId }) {
+    const p = await getRow('delegations', 'delegation_id', delegationId);
+    if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
+    const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
+    if (!canApproveParticipantRecord(user, p, pUser)) throw new ActionError('لا تملك صلاحية الرفض', 403);
+    if (p.delegations_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المشارك بالفعل', 400);
+    await updateRow('delegations', 'delegation_id', delegationId, { delegations_status: 'مرفوض' });
+    return { targetTable: 'delegations', targetId: delegationId, message: 'تم رفض المشارك' };
+  },
+
+  async approveOtherExpense({ user }, { expenseId }) {
+    const e = await getRow('other_expenses', 'expense_id', expenseId);
+    if (!e || e.federation_number !== user.federation_id) throw new ActionError('المصروف غير موجود', 404);
+    if (!canApproveOtherExpenseFor(user, e)) throw new ActionError('لا تملك صلاحية الاعتماد (قد يتطلب اعتماد جهة أخرى تجنبًا لتعارض المصالح)', 403);
+    if (e.expense_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المصروف بالفعل', 400);
+    await updateRow('other_expenses', 'expense_id', expenseId, { expense_status: 'معتمد', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    return { targetTable: 'other_expenses', targetId: expenseId, message: 'تم اعتماد المصروف' };
+  },
+
+  async cancelOtherExpense({ user }, { expenseId }) {
+    const e = await getRow('other_expenses', 'expense_id', expenseId);
+    if (!e || e.federation_number !== user.federation_id) throw new ActionError('المصروف غير موجود', 404);
+    if (!canApproveOtherExpenseFor(user, e)) throw new ActionError('لا تملك صلاحية الإلغاء', 403);
+    await updateRow('other_expenses', 'expense_id', expenseId, { expense_status: 'ملغى' });
+    return { targetTable: 'other_expenses', targetId: expenseId, message: 'تم إلغاء المصروف' };
+  },
+
+};
+
 const ATTACHMENTS_BUCKET = 'attachments';
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -231,15 +578,9 @@ app.post('/api/db', async (req, res) => {
   }
 
   /* -------- كل ما عدا تسجيل الدخول يتطلب رمز جلسة صالح -------- */
-  const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const claims = verifyToken(token);
-  if (!claims) {
-    return res.status(401).json({ data: null, error: { message: 'انتهت الجلسة أو غير صالحة. الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
-  }
-  const currentUser = await loadCurrentUser(claims.uid);
+  const currentUser = await authenticateRequest(req);
   if (!currentUser) {
-    return res.status(401).json({ data: null, error: { message: 'الحساب غير موجود أو غير مفعّل. الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
+    return res.status(401).json({ data: null, error: { message: 'انتهت الجلسة أو غير صالحة. الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
   }
   const isAuditor = currentUser.user_type === 'مراجع';
 
@@ -335,6 +676,41 @@ app.post('/api/db', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ data: null, error: { message: e.message || 'خطأ غير متوقع في الخادم' } });
+  }
+});
+
+/* -------------------------------------------------------------------
+   نقطة نهاية الإجراءات الحسّاسة (اعتماد/رفض/إقفال/تغيير حالة) — كل واحد منها
+   يعيد التحقق الكامل من الصلاحية على الخادم، ويُسجَّل بسجل التدقيق دائمًا.
+   ------------------------------------------------------------------- */
+app.post('/api/action', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!supabase) {
+    return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
+  }
+  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  const { action, ...params } = req.body || {};
+
+  const currentUser = await authenticateRequest(req);
+  if (!currentUser) {
+    return res.status(401).json({ data: null, error: { message: 'انتهت الجلسة أو غير صالحة. الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
+  }
+
+  const handler = ACTIONS[action];
+  if (!handler) {
+    await logAudit({ user: currentUser, action: String(action || 'unknown'), success: false, message: 'إجراء غير معروف', ip });
+    return res.status(400).json({ data: null, error: { message: 'إجراء غير معروف: ' + action } });
+  }
+
+  try {
+    const result = await handler({ user: currentUser }, params);
+    await logAudit({ user: currentUser, action, success: true, targetTable: result.targetTable, targetId: result.targetId, message: result.message, ip });
+    res.json({ data: result.data || null, message: result.message, error: null });
+  } catch (e) {
+    const status = e instanceof ActionError ? e.status : 500;
+    if (!(e instanceof ActionError)) console.error(e);
+    await logAudit({ user: currentUser, action, success: false, targetTable: params && (params.custodyId ? 'custodies' : undefined), message: e.message, ip });
+    res.status(status).json({ data: null, error: { message: e.message || 'خطأ غير متوقع في الخادم' } });
   }
 });
 

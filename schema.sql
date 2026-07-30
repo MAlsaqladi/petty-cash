@@ -324,6 +324,31 @@ alter table other_expenses enable row level security;
 -- لا سياسات anon هنا عن قصد — نفس مبدأ جداول العهد بالضبط (service_role فقط يصل).
 
 -- =====================================================================
+-- سجل التدقيق (Audit Log) — يسجّل كل محاولة إجراء حسّاس (اعتماد/رفض/إقفال/تغيير
+-- صلاحية) من الخادم مباشرة، سواء نجحت أو فشلت، لمن ومتى ولماذا.
+-- =====================================================================
+create table if not exists audit_log (
+  id                bigserial primary key,
+  created_at        timestamptz not null default now(),
+  user_id           text,
+  user_name         text,
+  federation_id     text,
+  action            text not null,
+  success           boolean not null,
+  target_table      text,
+  target_id         text,
+  message           text,
+  ip                text
+);
+create index if not exists idx_audit_log_user on audit_log(user_id);
+create index if not exists idx_audit_log_fed on audit_log(federation_id);
+create index if not exists idx_audit_log_created on audit_log(created_at desc);
+
+alter table audit_log enable row level security;
+-- لا سياسات anon هنا عن قصد — نفس مبدأ باقي الجداول (service_role فقط يصل، والقراءة من
+-- الواجهة تمر عبر مسار مخصّص server-side وليس عبر /api/db العام).
+
+-- =====================================================================
 -- بيانات أولية اختيارية — عدّل الأسماء ثم شغّل الجزء التالي لإضافة أول اتحاد
 -- (يمكنك أيضًا تركه وسيقوم التطبيق نفسه بإرشادك لإنشاء أول حساب دخول تلقائيًا)
 -- =====================================================================

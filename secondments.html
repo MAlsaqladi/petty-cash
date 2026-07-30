@@ -161,6 +161,16 @@ async function apiCall(body){
   try{ return await res.json(); }
   catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم' } }; }
 }
+/* استدعاء إجراء حسّاس (اعتماد/رفض/إقفال/تغيير حالة) — يُعاد التحقق من الصلاحية
+   بالكامل على الخادم، ويُسجَّل بسجل التدقيق دائمًا (نجح أو فشل) */
+async function apiAction(action, params){
+  let res;
+  try{ res = await fetch('/api/action', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(Auth.readToken()||'')}, body: JSON.stringify({ action, ...params }) }); }
+  catch(e){ return { data:null, error:{ message:'تعذّر الاتصال بالخادم.' } }; }
+  if(res.status === 401){ Auth.clearSession(); Auth.goToLogin(); return { data:null, error:{ message:'انتهت الجلسة، الرجاء تسجيل الدخول من جديد.' } }; }
+  try{ return await res.json(); }
+  catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم' } }; }
+}
 const READ_SOURCE = { users: 'users_public' };
 function readSource(table){ return READ_SOURCE[table] || table; }
 async function loadAllData(){
@@ -469,6 +479,10 @@ App.syncData = async function(){
   catch(err){ toast('تعذّرت المزامنة: '+(err.message||''),'danger'); }
   finally{ if(btn){ btn.disabled=false; btn.textContent='🔄 مزامنة'; } }
 };
+/* بعد أي إجراء حسّاس (اعتماد/رفض/إقفال) على الخادم، نعيد تحميل البيانات كاملة بدل تعديلها يدويًا */
+async function refreshAfterAction(){
+  try{ DB = await loadAllData(); }catch(e){ /* سيظهر أي خطأ اتصال فعلي بأول عملية تالية */ }
+}
 
 const ICONS = {
   home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>`,
@@ -1261,20 +1275,10 @@ Actions.approveTripAssignment = async function(tripId){
     toast(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للاعتماد`, 'danger');
     return;
   }
-  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'قيد الصرف', request_approved_by:u.user_id, request_approval_date:nowISO() });
-  if(!saved) return;
-  // اعتماد سريع لكل المشاركين المعلَّقين الذين تسمح لهذا المستخدم بالموافقة عليهم
-  // (باستثناء مشاركين هم أنفسهم رئيس الاتحاد/المدير التنفيذي إن لم يكن المعتمِد مخوّلًا بالموافقة عليهم)
-  const pending = tripParticipants(tripId).filter(p=>p.delegations_status==='غير معتمد');
-  let approvedCount = 0;
-  for(const p of pending){
-    if(Perm.canApproveParticipantRecord(u,p)){
-      await dbUpdate('delegations','delegation_id',p.delegation_id,{ delegations_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
-      approvedCount++;
-    }
-  }
-  const remaining = pending.length - approvedCount;
-  toast(`تم اعتماد التكليف وبدء الصرف${approvedCount?` واعتماد ${approvedCount} مشارك تلقائيًا`:''}${remaining?` — ${remaining} مشارك بحاجة لموافقة مستقلة (تعارض مصالح)`:''}`,'success');
+  const { message, error } = await apiAction('approveTripAssignment', { tripId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
+  toast(message || 'تم اعتماد التكليف','success');
   App.render();
 };
 Actions.rejectTrip = async function(tripId){
@@ -1287,8 +1291,9 @@ Actions.rejectTrip = async function(tripId){
     toast(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للبت في الطلب`, 'danger');
     return;
   }
-  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'مرفوضة' });
-  if(!saved) return;
+  const { error } = await apiAction('rejectTrip', { tripId });
+  if(error){ toast('تعذّر الرفض: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم رفض طلب الرحلة','success'); App.render();
 };
 Modals.closeTrip = function(tripId){
@@ -1309,8 +1314,9 @@ Actions.closeTrip = async function(tripId){
   if(pendingP>0 || pendingE>0){ toast('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المشاركين والمصاريف الأخرى المعلّقة','danger'); return; }
   const achieved = document.getElementById('ctAchieved').value.trim();
   if(!achieved){ toast('الرجاء تسجيل الأهداف المحققة قبل الإقفال','danger'); return; }
-  const saved = await dbUpdate('trips','trip_id',tripId,{ trip_status:'مغلقة', achieved_results:achieved, closure_approved_by:u.user_id, closure_approval_date:nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('closeTrip', { tripId, achieved });
+  if(error){ toast('تعذّر الإقفال: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   closeModal(); toast('تم إقفال الرحلة','success'); App.go('tripDetail',{id:tripId});
 };
 
@@ -1577,16 +1583,18 @@ Actions.approveParticipant = async function(delegationId){
   const u = Session.user;
   const p = DB.delegations.find(x=>x.delegation_id===delegationId);
   if(!p || !Perm.canApproveParticipantRecord(u,p)){ toast('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)','danger'); return; }
-  const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('approveParticipant', { delegationId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم اعتماد المشارك','success'); App.render();
 };
 Actions.rejectParticipant = async function(delegationId){
   const u = Session.user;
   const p = DB.delegations.find(x=>x.delegation_id===delegationId);
   if(!p || !Perm.canApproveParticipantRecord(u,p)){ toast('لا تملك صلاحية الرفض','danger'); return; }
-  const saved = await dbUpdate('delegations','delegation_id',delegationId,{ delegations_status:'مرفوض' });
-  if(!saved) return;
+  const { error } = await apiAction('rejectParticipant', { delegationId });
+  if(error){ toast('تعذّر الرفض: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم رفض المشارك','success'); App.render();
 };
 Actions.deleteParticipant = async function(delegationId, tripId){
@@ -1676,16 +1684,18 @@ Actions.approveOtherExpense = async function(expenseId){
   const u = Session.user;
   const e = DB.other_expenses.find(x=>x.expense_id===expenseId);
   if(!e || !Perm.canApproveOtherExpenseFor(u,e)){ toast('لا تملك صلاحية الاعتماد (قد يتطلب اعتماد جهة أخرى تجنبًا لتعارض المصالح)','danger'); return; }
-  const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'معتمد', request_approved_by:u.user_id, request_approval_date:nowISO() });
-  if(!saved) return;
+  const { error } = await apiAction('approveOtherExpense', { expenseId });
+  if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم اعتماد المصروف','success'); App.render();
 };
 Actions.cancelOtherExpense = async function(expenseId){
   const u = Session.user;
   const e = DB.other_expenses.find(x=>x.expense_id===expenseId);
   if(!e || !Perm.canApproveOtherExpenseFor(u,e)){ toast('لا تملك صلاحية الإلغاء','danger'); return; }
-  const saved = await dbUpdate('other_expenses','expense_id',expenseId,{ expense_status:'ملغى' });
-  if(!saved) return;
+  const { error } = await apiAction('cancelOtherExpense', { expenseId });
+  if(error){ toast('تعذّر الإلغاء: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم إلغاء المصروف','success'); App.render();
 };
 
@@ -2014,8 +2024,9 @@ Actions.setUserStatus = async function(userId,status){
   const u = Session.user;
   const target = DB.users.find(x=>x.user_id===userId);
   if(!Perm.canChangeUserStatus(u) || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
-  const saved = await dbUpdateUser(userId, { user_status: status });
-  if(!saved) return;
+  const { error } = await apiAction('changeUserStatus', { userId, newStatus: status });
+  if(error){ toast('تعذّر تحديث الحالة: ' + error.message, 'danger'); return; }
+  await refreshAfterAction();
   toast('تم تحديث حالة المستخدم','success'); App.render();
 };
 Actions.changeUserStatus = async function(userId, newStatus){
