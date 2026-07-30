@@ -37,6 +37,8 @@ create table if not exists users (
   user_type           text not null,
   "Job_Title"         text,
   language            text default 'ar',
+  totp_secret         text,
+  otp_enabled         boolean not null default false,
   created_at          timestamptz default now(),
   created_by          text
 );

@@ -2909,6 +2909,16 @@ Actions.changeUserStatus = async function(userId, newStatus){
   toast('تم تحديث حالة المستخدم إلى: ' + newStatus, 'success');
   App.render();
 };
+
+Actions.resetUserTwoFactor = async function(userId){
+  const u = Session.user;
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!Perm.canChangeUserStatus(u) || !target || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية إعادة الضبط','danger'); return; }
+  if(!confirm('سيُطلب من هذا المستخدم إعداد التحقق بخطوتين من جديد عند دخوله القادم. متابعة؟')) return;
+  const { message, error } = await apiAction('resetUserTwoFactor', { userId });
+  if(error){ toast('تعذّر إعادة الضبط: ' + error.message, 'danger'); return; }
+  toast(message || 'تمت إعادة الضبط', 'success');
+};
 /* ============================= Cost Centers ============================= */
 Views.costCenters = function(){
   const u = Session.user;
@@ -3164,10 +3174,14 @@ Views.userDetail = function(userId){
   const canSee = Perm.isAuditor(u) || target.federation_id===u.federation_id;
   if(!canSee) return `<div class="card card-pad">لا تملك صلاحية عرض بيانات هذا المستخدم.</div>`;
   const fed = federationById(target.federation_id);
+  const resetBtn = Perm.canChangeUserStatus(u) ? `<button class="btn btn-outline btn-sm" onclick="Actions.resetUserTwoFactor('${userId}')">🔓 إعادة ضبط التحقق بخطوتين</button>` : '';
   return `
     <div class="flex between center">
       <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
-      <button class="btn btn-outline btn-sm" onclick="Actions.printUserProfile('${userId}')">🖨 طباعة</button>
+      <div class="flex gap-8">
+        ${resetBtn}
+        <button class="btn btn-outline btn-sm" onclick="Actions.printUserProfile('${userId}')">🖨 طباعة</button>
+      </div>
     </div>
     <div class="card card-pad mt-8">
       <div class="flex center gap-16">

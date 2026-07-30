@@ -62,6 +62,7 @@ if (!SESSION_SECRET) {
   console.warn('  أضِف SESSION_SECRET (نص عشوائي طويل) في Render → Environment لتفادي ذلك.');
 }
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 ساعة
+const PREAUTH_TTL_MS = 10 * 60 * 1000; // 10 دقائق — رمز مؤقت بين خطوة كلمة المرور وخطوة رمز التحقق
 
 function b64url(buf) { return Buffer.from(buf).toString('base64url'); }
 
@@ -86,6 +87,65 @@ function verifyToken(token) {
   } catch (e) {
     return null;
   }
+}
+/* رمز جلسة كامل (بعد نجاح كلمة المرور + رمز التحقق بخطوتين) */
+function signSessionToken(uid) {
+  return signToken({ uid, purpose: 'session', iat: Date.now(), exp: Date.now() + TOKEN_TTL_MS });
+}
+/* رمز مؤقت بين خطوة كلمة المرور وخطوة إدخال رمز التحقق — لا يصلح إطلاقًا كرمز جلسة حقيقي */
+function signPreAuthToken(uid) {
+  return signToken({ uid, purpose: '2fa', iat: Date.now(), exp: Date.now() + PREAUTH_TTL_MS });
+}
+
+/* =========================================================================
+   التحقق بخطوتين (TOTP — نفس معيار RFC 6238 المستخدم في Google/Microsoft
+   Authenticator وغيرها). تحقّقنا من صحة الخوارزمية مقابل متجهات اختبار RFC
+   الرسمية قبل استخدامها. لا تحتاج مكتبة خارجية.
+   ========================================================================= */
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function base32Encode(buf) {
+  let bits = 0, value = 0, output = '';
+  for (let i = 0; i < buf.length; i++) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) { output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  return output;
+}
+function base32Decode(str) {
+  str = (str || '').replace(/=+$/, '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = 0, value = 0;
+  const out = [];
+  for (const c of str) {
+    const idx = BASE32_ALPHABET.indexOf(c);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+function generateTotpSecret() { return base32Encode(crypto.randomBytes(20)); } // 160-بت، القياس الشائع
+function totpCodeAtCounter(keyBuf, counter, digits) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(counter));
+  const hmac = crypto.createHmac('sha1', keyBuf).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const code = ((hmac[offset] & 0x7f) << 24) | ((hmac[offset + 1] & 0xff) << 16) | ((hmac[offset + 2] & 0xff) << 8) | (hmac[offset + 3] & 0xff);
+  const mod = Math.pow(10, digits);
+  return String(code % mod).padStart(digits, '0');
+}
+/* يقبل الرمز الحالي أو رمز الخطوة السابقة/التالية (نافذة ±30 ثانية) لتفادي مشاكل فرق الساعة البسيط */
+function verifyTotp(secretB32, token) {
+  if (!/^\d{6}$/.test(token || '')) return false;
+  const key = base32Decode(secretB32);
+  const now = Date.now();
+  for (let w = -1; w <= 1; w++) {
+    const counter = Math.floor((now + w * 30000) / 1000 / 30);
+    if (totpCodeAtCounter(key, counter, 6) === token) return true;
+  }
+  return false;
 }
 
 /* =========================================================================
@@ -167,7 +227,7 @@ async function authenticateRequest(req) {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
   const claims = verifyToken(token);
-  if (!claims) return null;
+  if (!claims || claims.purpose === '2fa') return null; // رمز مؤقت بين خطوتي الدخول لا يصلح كجلسة حقيقية
   return await loadCurrentUser(claims.uid);
 }
 
@@ -415,6 +475,14 @@ const ACTIONS = {
     return { targetTable: 'users', targetId: userId, message: 'تم تحديث حالة المستخدم إلى: ' + newStatus };
   },
 
+  async resetUserTwoFactor({ user }, { userId }) {
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية إعادة ضبط التحقق بخطوتين', 403);
+    const target = await getRow('users_public', 'user_id', userId);
+    if (!target || target.federation_id !== user.federation_id) throw new ActionError('المستخدم غير موجود', 404);
+    await updateRow('users', 'user_id', userId, { totp_secret: null, otp_enabled: false });
+    return { targetTable: 'users', targetId: userId, message: 'تمت إعادة ضبط التحقق بخطوتين — سيُطلب من المستخدم إعداده من جديد عند أول دخول' };
+  },
+
   async approveTripAssignment({ user }, { tripId }) {
     const t = await getRow('trips', 'trip_id', tripId);
     if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
@@ -569,12 +637,58 @@ app.post('/api/db', async (req, res) => {
       rows = rows.filter(u => !NO_LOGIN_USER_TYPES.has(u.user_type) && u.user_status === 'مفتوح');
       if (!rows.length) return res.json({ data: [], error: null }); // بيانات دخول خاطئة أو حساب غير مفعّل
       const u = rows[0];
-      const token = signToken({ uid: u.user_id, iat: Date.now(), exp: Date.now() + TOKEN_TTL_MS });
-      return res.json({ data: rows, token, error: null });
+
+      // كلمة المرور صحيحة — الآن خطوة التحقق بخطوتين (TOTP) إلزامية دائمًا قبل إصدار جلسة حقيقية
+      const { data: raw } = await supabase.from('users').select('otp_enabled, totp_secret').eq('user_id', u.user_id).single();
+      const preToken = signPreAuthToken(u.user_id);
+      if (raw && raw.otp_enabled && raw.totp_secret) {
+        // المستخدم فعّل التحقق بخطوتين مسبقًا — يحتاج فقط إدخال الرمز من تطبيق المصادقة
+        return res.json({ data: [], otpRequired: true, otpSetup: false, preToken, error: null });
+      }
+      // أول مرة: نولّد مفتاحًا جديدًا ونطلب من المستخدم مسحه/إدخاله بتطبيق مصادقة قبل تفعيله فعليًا
+      const secret = generateTotpSecret();
+      await supabase.from('users').update({ totp_secret: secret }).eq('user_id', u.user_id);
+      return res.json({
+        data: [], otpRequired: true, otpSetup: true, preToken,
+        setupSecret: secret, setupAccount: u.user_name, error: null,
+      });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ data: null, error: { message: e.message || 'خطأ غير متوقع في الخادم' } });
     }
+  }
+
+  /* -------- الخطوة الثانية: التحقق من رمز TOTP وإصدار جلسة حقيقية -------- */
+  if (op === 'rpc' && fn === 'verify2fa') {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    if (!checkLoginRateLimit(ip)) {
+      return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
+    }
+    const { preToken, code } = args || {};
+    const claims = verifyToken(preToken);
+    if (!claims || claims.purpose !== '2fa') {
+      return res.status(401).json({ data: null, error: { message: 'انتهت صلاحية عملية الدخول. الرجاء إعادة إدخال بيانات الدخول من جديد.' } });
+    }
+    const { data: raw, error: rawErr } = await supabase.from('users').select('*').eq('user_id', claims.uid).single();
+    if (rawErr || !raw) return res.status(401).json({ data: null, error: { message: 'الحساب غير موجود.' } });
+    if (raw.user_status !== 'مفتوح' || NO_LOGIN_USER_TYPES.has(raw.user_type)) {
+      return res.status(401).json({ data: null, error: { message: 'الحساب غير متاح حاليًا.' } });
+    }
+    if (!raw.totp_secret) {
+      return res.status(400).json({ data: null, error: { message: 'لم يتم إعداد التحقق بخطوتين لهذا الحساب بعد. أعد تسجيل الدخول.' } });
+    }
+    const ok = verifyTotp(raw.totp_secret, code);
+    const { password, totp_secret, ...publicUser } = raw;
+    if (!ok) {
+      await logAudit({ user: publicUser, action: 'verify2fa', success: false, message: 'رمز تحقق غير صحيح', ip });
+      return res.status(401).json({ data: null, error: { message: 'رمز التحقق غير صحيح.' } });
+    }
+    if (!raw.otp_enabled) {
+      await supabase.from('users').update({ otp_enabled: true }).eq('user_id', claims.uid);
+    }
+    await logAudit({ user: publicUser, action: 'verify2fa', success: true, ip });
+    const token = signSessionToken(claims.uid);
+    return res.json({ data: [publicUser], token, error: null });
   }
 
   /* -------- كل ما عدا تسجيل الدخول يتطلب رمز جلسة صالح -------- */
@@ -723,7 +837,7 @@ function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
   const claims = verifyToken(token);
-  if (!claims) return res.status(401).json({ data: null, error: { message: 'الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
+  if (!claims || claims.purpose === '2fa') return res.status(401).json({ data: null, error: { message: 'الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
   req.uid = claims.uid;
   next();
 }

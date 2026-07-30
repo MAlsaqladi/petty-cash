@@ -92,6 +92,25 @@
   </div>
 </div>
 
+<!-- ============ SCREEN 4: التحقق بخطوتين ============ -->
+<div id="screen-2fa" class="stage hidden">
+  <div class="stage-card">
+    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
+    <span class="back-link" onclick="backToLogin()">‹ رجوع</span>
+    <h1 class="stage-title">التحقق بخطوتين</h1>
+    <div id="otpSetupBox"></div>
+    <p class="stage-sub" id="otpSub">أدخل رمز التحقق المكوّن من 6 أرقام من تطبيق المصادقة.</p>
+    <div class="card card-pad">
+      <div class="field">
+        <label>رمز التحقق</label>
+        <input type="text" id="otpCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000" style="letter-spacing:8px;font-size:20px;text-align:center;">
+      </div>
+      <button class="btn btn-primary btn-block" id="otpBtn" onclick="doVerify2fa()">تأكيد</button>
+      <div id="otpAlert"></div>
+    </div>
+  </div>
+</div>
+
 <div id="toastRoot"></div>
 
 <script>
@@ -101,6 +120,7 @@ const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
 const SYSTEM_LABELS = { custody:'نظام إدارة العهد النقدية', secondments:'نظام إدارة الانتدابات وتذاكر السفر' };
 const SYSTEM_TARGETS = { custody:'index.html', secondments:'secondments.html' };
 let chosenSystem = null;
+let PendingLogin = null; // { preToken, otpSetup, setupSecret, setupAccount }
 
 async function apiCall(body){
   let res;
@@ -114,7 +134,7 @@ async function apiCall(body){
 }
 
 function showScreen(id){
-  ['screen-boot','screen-choose','screen-login'].forEach(s=>{
+  ['screen-boot','screen-choose','screen-login','screen-2fa'].forEach(s=>{
     document.getElementById(s).classList.toggle('hidden', s!==id);
   });
 }
@@ -146,10 +166,15 @@ async function doLogin(){
     return;
   }
   btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-  const { data, token, error } = await apiCall({ op:'rpc', fn:'login', args:{ p_username: username, p_password: password } });
+  const { data, token, otpRequired, otpSetup, preToken, setupSecret, setupAccount, error } = await apiCall({ op:'rpc', fn:'login', args:{ p_username: username, p_password: password } });
   btn.disabled = false; btn.textContent = 'تسجيل الدخول';
   if(error){
     alertEl.innerHTML = `<div class="alert alert-danger">${esc(error.message)}</div>`;
+    return;
+  }
+  if(otpRequired){
+    PendingLogin = { preToken, otpSetup, setupSecret, setupAccount };
+    showOtpScreen();
     return;
   }
   const u = (data && data[0]) ? data[0] : null;
@@ -166,6 +191,66 @@ async function doLogin(){
     alertEl.innerHTML = `<div class="alert alert-warning">${esc(msgs[u.user_status] || 'الحساب غير مفعّل حاليًا.')}</div>`;
     return;
   }
+  Auth.saveSession(u, token);
+  window.location.href = SYSTEM_TARGETS[chosenSystem];
+}
+
+function showOtpScreen(){
+  const box = document.getElementById('otpSetupBox');
+  const sub = document.getElementById('otpSub');
+  document.getElementById('otpAlert').innerHTML = '';
+  document.getElementById('otpCode').value = '';
+  if(PendingLogin.otpSetup){
+    sub.textContent = 'هذه أول مرة تسجّل فيها الدخول — أعدّ تطبيق مصادقة على جوالك (مثل Google Authenticator أو Microsoft Authenticator)، ثم أدخل الرمز المكوّن من 6 أرقام الذي يظهر بالتطبيق.';
+    box.innerHTML = `
+      <div class="alert alert-info">
+        <div style="font-weight:800;margin-bottom:6px;">إعداد التحقق بخطوتين لأول مرة</div>
+        <div class="small">افتح تطبيق المصادقة، اختر "إضافة حساب" ثم "إدخال مفتاح الإعداد يدويًا" (Enter setup key manually)، وأدخل:</div>
+        <div style="margin:10px 0 6px;">
+          <div class="small muted">اسم الحساب</div>
+          <div style="font-weight:800;">${esc(PendingLogin.setupAccount)}</div>
+        </div>
+        <div>
+          <div class="small muted">مفتاح الإعداد (Setup key / Time-based)</div>
+          <div style="font-family:monospace;font-size:16px;font-weight:800;letter-spacing:2px;background:var(--line-soft);padding:8px 10px;border-radius:8px;margin-top:4px;word-break:break-all;">${esc(PendingLogin.setupSecret)}</div>
+        </div>
+      </div>`;
+  }else{
+    sub.textContent = 'أدخل رمز التحقق المكوّن من 6 أرقام من تطبيق المصادقة المرتبط بحسابك.';
+    box.innerHTML = '';
+  }
+  showScreen('screen-2fa');
+  document.getElementById('otpCode').focus();
+}
+
+function backToLogin(){
+  PendingLogin = null;
+  showScreen('screen-login');
+}
+
+async function doVerify2fa(){
+  if(!PendingLogin){ backToLogin(); return; }
+  const code = document.getElementById('otpCode').value.trim();
+  const alertEl = document.getElementById('otpAlert');
+  const btn = document.getElementById('otpBtn');
+  alertEl.innerHTML = '';
+  if(!/^\d{6}$/.test(code)){
+    alertEl.innerHTML = `<div class="alert alert-danger">أدخل رمزًا صحيحًا مكوّنًا من 6 أرقام.</div>`;
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
+  const { data, token, error } = await apiCall({ op:'rpc', fn:'verify2fa', args:{ preToken: PendingLogin.preToken, code } });
+  btn.disabled = false; btn.textContent = 'تأكيد';
+  if(error){
+    alertEl.innerHTML = `<div class="alert alert-danger">${esc(error.message)}</div>`;
+    return;
+  }
+  const u = (data && data[0]) ? data[0] : null;
+  if(!u || !token){
+    alertEl.innerHTML = `<div class="alert alert-danger">تعذّر إكمال تسجيل الدخول.</div>`;
+    return;
+  }
+  PendingLogin = null;
   Auth.saveSession(u, token);
   window.location.href = SYSTEM_TARGETS[chosenSystem];
 }
@@ -199,6 +284,7 @@ async function boot(){
 document.addEventListener('DOMContentLoaded', function(){
   document.getElementById('loginPass').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
   document.getElementById('loginUser').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+  document.getElementById('otpCode').addEventListener('keydown', function(e){ if(e.key==='Enter') doVerify2fa(); });
   boot();
 });
 </script>

@@ -2029,6 +2029,15 @@ Actions.setUserStatus = async function(userId,status){
   await refreshAfterAction();
   toast('تم تحديث حالة المستخدم','success'); App.render();
 };
+Actions.resetUserTwoFactor = async function(userId){
+  const u = Session.user;
+  const target = DB.users.find(x=>x.user_id===userId);
+  if(!Perm.canChangeUserStatus(u) || !target || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية إعادة الضبط','danger'); return; }
+  if(!confirm('سيُطلب من هذا المستخدم إعداد التحقق بخطوتين من جديد عند دخوله القادم. متابعة؟')) return;
+  const { message, error } = await apiAction('resetUserTwoFactor', { userId });
+  if(error){ toast('تعذّر إعادة الضبط: ' + error.message, 'danger'); return; }
+  toast(message || 'تمت إعادة الضبط', 'success');
+};
 Actions.changeUserStatus = async function(userId, newStatus){
   if(!newStatus) return;
   return Actions.setUserStatus(userId, newStatus);
@@ -2058,10 +2067,14 @@ Views.userDetail = function(userId){
       <td>${delegationStatusBadge(d.delegations_status)}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="8"><div class="empty-row">لم يسافر هذا المستخدم في أي انتداب بعد</div></td></tr>`;
+  const resetBtn = Perm.canChangeUserStatus(u) ? `<button class="btn btn-outline btn-sm" onclick="Actions.resetUserTwoFactor('${userId}')">🔓 إعادة ضبط التحقق بخطوتين</button>` : '';
   return `
     <div class="flex between center">
       <button class="btn btn-ghost btn-sm" style="padding-right:0;" onclick="App.go('users')">‹ رجوع لقائمة المستخدمين</button>
-      <button class="btn btn-outline btn-sm" onclick="Actions.printUserProfile('${userId}')">🖨 طباعة</button>
+      <div class="flex gap-8">
+        ${resetBtn}
+        <button class="btn btn-outline btn-sm" onclick="Actions.printUserProfile('${userId}')">🖨 طباعة</button>
+      </div>
     </div>
     <div class="card card-pad mt-8">
       <div class="flex center gap-16">
