@@ -5,6 +5,10 @@
 
 create extension if not exists pgcrypto;
 
+-- نضبط مسار البحث لهذه الجلسة حتى تُوجَد دوال pgcrypto (crypt/gen_salt) بغض
+-- النظر عن الـ schema اللي ركّبت فيه Supabase الامتداد (عادة "extensions")
+set search_path = public, extensions;
+
 -- ---------------------------------------------------------------------
 -- الجداول
 -- ---------------------------------------------------------------------
@@ -153,14 +157,14 @@ create or replace function hash_password(p text)
 returns text
 language sql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$ select crypt(p, gen_salt('bf')); $$;
 
 -- دالة تسجيل الدخول: تتحقق من اسم المستخدم وكلمة المرور (مقارنة تجزئة bcrypt) وتُرجع بيانات المستخدم بدون كلمة المرور
 create or replace function login(p_username text, p_password text)
 returns setof users_public
 language plpgsql security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -176,7 +180,7 @@ $$;
 create or replace function change_password(p_user_id text, p_old_password text, p_new_password text)
 returns boolean
 language plpgsql security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_match boolean;
