@@ -61,7 +61,7 @@ if (!SESSION_SECRET) {
   console.warn('  هذا يعني أن كل جلسات الدخول ستُلغى تلقائيًا عند أي إعادة تشغيل للخادم.');
   console.warn('  أضِف SESSION_SECRET (نص عشوائي طويل) في Render → Environment لتفادي ذلك.');
 }
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 ساعة
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // أسبوع — الجلسة تنتهي بعده ويُطلب تسجيل الدخول (وبالتالي رمز التحقق بخطوتين) من جديد
 const PREAUTH_TTL_MS = 10 * 60 * 1000; // 10 دقائق — رمز مؤقت بين خطوة كلمة المرور وخطوة رمز التحقق
 
 function b64url(buf) { return Buffer.from(buf).toString('base64url'); }

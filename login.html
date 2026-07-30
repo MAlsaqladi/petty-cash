@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&family=Tajawal:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <script src="auth.js"></script>
+<script src="qrcode.js"></script>
 <link rel="stylesheet" href="shared.css">
 <style>
   .system-choice{display:grid;gap:12px;margin-top:4px;}
@@ -195,26 +196,42 @@ async function doLogin(){
   window.location.href = SYSTEM_TARGETS[chosenSystem];
 }
 
+function buildOtpAuthUri(secret, account){
+  const issuer = 'بوابة الأنظمة';
+  const label = encodeURIComponent(issuer + ':' + account);
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`;
+}
+
 function showOtpScreen(){
   const box = document.getElementById('otpSetupBox');
   const sub = document.getElementById('otpSub');
   document.getElementById('otpAlert').innerHTML = '';
   document.getElementById('otpCode').value = '';
   if(PendingLogin.otpSetup){
-    sub.textContent = 'هذه أول مرة تسجّل فيها الدخول — أعدّ تطبيق مصادقة على جوالك (مثل Google Authenticator أو Microsoft Authenticator)، ثم أدخل الرمز المكوّن من 6 أرقام الذي يظهر بالتطبيق.';
+    sub.textContent = 'هذه أول مرة تسجّل فيها الدخول — افتح تطبيق مصادقة على جوالك (مثل Google Authenticator أو Microsoft Authenticator) وامسح الرمز، أو أدخل المفتاح يدويًا، ثم أدخل الرمز المكوّن من 6 أرقام الذي يظهر بالتطبيق.';
     box.innerHTML = `
       <div class="alert alert-info">
-        <div style="font-weight:800;margin-bottom:6px;">إعداد التحقق بخطوتين لأول مرة</div>
-        <div class="small">افتح تطبيق المصادقة، اختر "إضافة حساب" ثم "إدخال مفتاح الإعداد يدويًا" (Enter setup key manually)، وأدخل:</div>
-        <div style="margin:10px 0 6px;">
+        <div style="font-weight:800;margin-bottom:10px;">إعداد التحقق بخطوتين لأول مرة</div>
+        <div id="otpQrWrap" style="background:#fff;padding:12px;border-radius:10px;display:flex;justify-content:center;margin-bottom:12px;"></div>
+        <div class="small muted" style="margin-bottom:8px;">امسح الرمز أعلاه بتطبيق المصادقة. إذا تعذّر المسح، اختر "إدخال المفتاح يدويًا" وأدخل:</div>
+        <div style="margin:8px 0;">
           <div class="small muted">اسم الحساب</div>
           <div style="font-weight:800;">${esc(PendingLogin.setupAccount)}</div>
         </div>
         <div>
-          <div class="small muted">مفتاح الإعداد (Setup key / Time-based)</div>
+          <div class="small muted">مفتاح الإعداد (Setup key)</div>
           <div style="font-family:monospace;font-size:16px;font-weight:800;letter-spacing:2px;background:var(--line-soft);padding:8px 10px;border-radius:8px;margin-top:4px;word-break:break-all;">${esc(PendingLogin.setupSecret)}</div>
         </div>
       </div>`;
+    try{
+      const uri = buildOtpAuthUri(PendingLogin.setupSecret, PendingLogin.setupAccount);
+      const qr = qrcode(0, 'M');
+      qr.addData(uri);
+      qr.make();
+      document.getElementById('otpQrWrap').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4, scalable: true });
+      const svgEl = document.getElementById('otpQrWrap').querySelector('svg');
+      if(svgEl){ svgEl.style.width = '190px'; svgEl.style.height = '190px'; }
+    }catch(e){ /* لو تعذّر توليد الرمز، يبقى المفتاح النصي كافيًا للإعداد اليدوي */ }
   }else{
     sub.textContent = 'أدخل رمز التحقق المكوّن من 6 أرقام من تطبيق المصادقة المرتبط بحسابك.';
     box.innerHTML = '';
