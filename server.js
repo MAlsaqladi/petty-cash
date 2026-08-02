@@ -64,15 +64,16 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
       الطرق الثلاث أعلاه أضمن بكثير عليه.
    الأولوية عند توفر أكثر من طريقة معًا: Resend، ثم Brevo، ثم SendGrid، ثم SMTP.
    ========================================================================= */
-const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const RESEND_FROM = process.env.RESEND_FROM || '';
-const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
-const SENDGRID_FROM = process.env.SENDGRID_FROM || process.env.SMTP_FROM || '';
-const SMTP_HOST = process.env.SMTP_HOST || '';
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+const envTrim = (v) => (v || '').trim();
+const RESEND_API_KEY = envTrim(process.env.RESEND_API_KEY);
+const RESEND_FROM = envTrim(process.env.RESEND_FROM);
+const BREVO_API_KEY = envTrim(process.env.BREVO_API_KEY);
+const SENDGRID_API_KEY = envTrim(process.env.SENDGRID_API_KEY);
+const SENDGRID_FROM = envTrim(process.env.SENDGRID_FROM) || envTrim(process.env.SMTP_FROM);
+const SMTP_HOST = envTrim(process.env.SMTP_HOST);
+const SMTP_USER = envTrim(process.env.SMTP_USER);
+const SMTP_PASS = envTrim(process.env.SMTP_PASS);
+const SMTP_FROM = envTrim(process.env.SMTP_FROM) || SMTP_USER;
 
 let mailTransporter = null;
 if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
@@ -116,7 +117,7 @@ async function sendMailUnified({ to, subject, text, html }) {
     return;
   }
   if (BREVO_API_KEY) {
-    const fromEmail = process.env.SMTP_FROM || process.env.BREVO_FROM_EMAIL;
+    const fromEmail = envTrim(process.env.SMTP_FROM) || envTrim(process.env.BREVO_FROM_EMAIL);
     if (!fromEmail) throw new Error('أضف SMTP_FROM (بريد المُرسل الموثّق في Brevo) في متغيرات البيئة.');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);

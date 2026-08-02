@@ -153,8 +153,13 @@ function rerenderKeepFocus(containerId, html){
   if(!body) return;
   const active = document.activeElement;
   const activeId = (active && body.contains(active) && active.id) ? active.id : null;
-  const selStart = (activeId && active.selectionStart != null) ? active.selectionStart : null;
-  const selEnd = (activeId && active.selectionEnd != null) ? active.selectionEnd : null;
+  // قراءة selectionStart/selectionEnd تُطلق استثناءً على حقول type="number"
+  // بمعظم المتصفحات (لا تدعم تحديد النص) — لهذا لازم تُغلَّف بمحاولة/التقاط
+  // منفصلة، وإلا تتوقف الدالة كاملة قبل إعادة الرسم أصلاً.
+  let selStart = null, selEnd = null;
+  if(activeId){
+    try{ selStart = active.selectionStart; selEnd = active.selectionEnd; }catch(e){ selStart = null; selEnd = null; }
+  }
   body.innerHTML = html;
   if(activeId){
     const el = document.getElementById(activeId);
