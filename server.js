@@ -52,16 +52,21 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
   : null;
 
 /* =========================================================================
-   إرسال البريد (لميزة "نسيت كلمة المرور") — طريقتان، اختر إحداهما فقط:
+   إرسال البريد (لميزة "نسيت كلمة المرور") — ثلاث طرق، اختر واحدة فقط:
 
-   1) BREVO_API_KEY — الأفضل والموصى به: يرسل عبر HTTPS العادي (نفس بروتوكول
-      فتح أي موقع)، ويعمل بثبات على Render وأي مضيف آخر. Render (والعديد من
-      مزوّدي الاستضافة) تحجب منافذ SMTP الصادرة (587/465) افتراضيًا لمنع
-      إساءة الاستخدام، فلو استخدمت SMTP فقط قد يعلّق الطلب لعدة دقائق بدون
-      أي خطأ واضح ثم يفشل — لهذا BREVO_API_KEY أضمن بكثير على Render.
-   2) SMTP_HOST/SMTP_USER/SMTP_PASS — تعمل فقط لو كانت منافذ SMTP الصادرة
-      غير محجوبة على مضيفك (غالبًا لا تعمل على Render الافتراضي).
+   1) RESEND_API_KEY — بديل بسيط جدًا وموثوق، يرسل عبر HTTPS (لا يتأثر بحجب
+      منافذ SMTP). يحتاج توثيق نطاق (domain) في Resend لإرسال فعلي لأي بريد،
+      أو يمكن تجربته مباشرة عبر onboarding@resend.dev لبريدك أنت فقط أثناء
+      الاختبار قبل توثيق النطاق.
+   2) BREVO_API_KEY — أيضًا يرسل عبر HTTPS. يحتاج توثيق بريد "مُرسل" واحد
+      فقط في Brevo (أسهل من توثيق نطاق كامل).
+   3) SMTP_HOST/SMTP_USER/SMTP_PASS — تعمل فقط لو كانت منافذ SMTP الصادرة
+      (587/465) غير محجوبة على مضيفك. Render يحجبها افتراضيًا غالبًا، لذا
+      الطريقتان أعلاه أضمن بكثير عليه.
+   الأولوية عند توفر أكثر من طريقة: Resend، ثم Brevo، ثم SMTP.
    ========================================================================= */
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM = process.env.RESEND_FROM || '';
 const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_USER = process.env.SMTP_USER || '';
@@ -82,13 +87,33 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     socketTimeout: 8000,
   });
 }
-const MAIL_CONFIGURED = !!(BREVO_API_KEY || mailTransporter);
+const MAIL_CONFIGURED = !!(RESEND_API_KEY || BREVO_API_KEY || mailTransporter);
 if (!MAIL_CONFIGURED) {
-  console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا BREVO_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
+  console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا RESEND_API_KEY ولا BREVO_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
 }
 
-/* دالة إرسال موحّدة — تستخدم Brevo HTTP API إن وُجد مفتاحه (موصى به)، وإلا SMTP */
+/* دالة إرسال موحّدة — تجرّب Resend HTTP API أولاً إن وُجد مفتاحه، ثم Brevo، وإلا SMTP */
 async function sendMailUnified({ to, subject, text, html }) {
+  if (RESEND_API_KEY) {
+    const fromEmail = RESEND_FROM || 'onboarding@resend.dev';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RESEND_API_KEY}` },
+        body: JSON.stringify({ from: fromEmail, to: [to], subject, text, html }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`فشل إرسال البريد عبر Resend (${res.status}): ${errText.slice(0, 200)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
   if (BREVO_API_KEY) {
     const fromEmail = process.env.SMTP_FROM || process.env.BREVO_FROM_EMAIL;
     if (!fromEmail) throw new Error('أضف SMTP_FROM (بريد المُرسل الموثّق في Brevo) في متغيرات البيئة.');
@@ -734,6 +759,9 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
       msg = 'تعذّر إرسال البريد: بيانات تسجيل الدخول (SMTP_USER أو SMTP_PASS) غير صحيحة. تأكد من أن SMTP_PASS هي كلمة مرور التطبيق (App Password) الصحيحة وأنها لم تُلغَ.';
     } else if (e && (e.code === 'ECONNECTION' || e.code === 'ETIMEDOUT' || e.code === 'ESOCKET')) {
       msg = 'تعذّر إرسال البريد: تعذّر الاتصال بخادم البريد. تأكد من صحة SMTP_HOST وSMTP_PORT.';
+    } else if (e && e.message && (e.message.includes('Resend') || e.message.includes('Brevo'))) {
+      // رسائل Resend/Brevo تحمل تفاصيل مفيدة أصلاً (رمز الحالة ونص الخطأ من مزوّد البريد نفسه)
+      msg = 'تعذّر إرسال البريد: ' + e.message;
     }
     return res.status(500).json({ data: null, error: { message: msg } });
   }
