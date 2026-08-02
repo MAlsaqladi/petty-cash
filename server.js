@@ -52,14 +52,22 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
   : null;
 
 /* =========================================================================
-   إرسال البريد (لميزة "نسيت كلمة المرور") — يتطلب متغيّرات بيئة SMTP على
-   Render → Environment: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS، واختياريًا
-   SMTP_FROM (وإلا يُستخدم SMTP_USER) و SMTP_SECURE=true إن كان المنفذ 465.
+   إرسال البريد (لميزة "نسيت كلمة المرور") — طريقتان، اختر إحداهما فقط:
+
+   1) BREVO_API_KEY — الأفضل والموصى به: يرسل عبر HTTPS العادي (نفس بروتوكول
+      فتح أي موقع)، ويعمل بثبات على Render وأي مضيف آخر. Render (والعديد من
+      مزوّدي الاستضافة) تحجب منافذ SMTP الصادرة (587/465) افتراضيًا لمنع
+      إساءة الاستخدام، فلو استخدمت SMTP فقط قد يعلّق الطلب لعدة دقائق بدون
+      أي خطأ واضح ثم يفشل — لهذا BREVO_API_KEY أضمن بكثير على Render.
+   2) SMTP_HOST/SMTP_USER/SMTP_PASS — تعمل فقط لو كانت منافذ SMTP الصادرة
+      غير محجوبة على مضيفك (غالبًا لا تعمل على Render الافتراضي).
    ========================================================================= */
+const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+
 let mailTransporter = null;
 if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
   mailTransporter = nodemailer.createTransport({
@@ -67,10 +75,52 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === 'true',
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    // مهلات صارمة حتى لا يعلّق الطلب دقائق طويلة إن كان المنفذ محجوبًا —
+    // يفشل بسرعة برسالة خطأ واضحة بدل التعليق الصامت
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 8000,
   });
-} else {
-  console.warn('⚠ تحذير: إعدادات SMTP غير مكتملة (SMTP_HOST/SMTP_USER/SMTP_PASS). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف هذه المتغيرات في Render → Environment.');
 }
+const MAIL_CONFIGURED = !!(BREVO_API_KEY || mailTransporter);
+if (!MAIL_CONFIGURED) {
+  console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا BREVO_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
+}
+
+/* دالة إرسال موحّدة — تستخدم Brevo HTTP API إن وُجد مفتاحه (موصى به)، وإلا SMTP */
+async function sendMailUnified({ to, subject, text, html }) {
+  if (BREVO_API_KEY) {
+    const fromEmail = process.env.SMTP_FROM || process.env.BREVO_FROM_EMAIL;
+    if (!fromEmail) throw new Error('أضف SMTP_FROM (بريد المُرسل الموثّق في Brevo) في متغيرات البيئة.');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'api-key': BREVO_API_KEY },
+        body: JSON.stringify({
+          sender: { email: fromEmail },
+          to: [{ email: to }],
+          subject, textContent: text, htmlContent: html,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`فشل إرسال البريد عبر Brevo (${res.status}): ${errText.slice(0, 200)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
+  if (mailTransporter) {
+    await mailTransporter.sendMail({ from: SMTP_FROM, to, subject, text, html });
+    return;
+  }
+  throw new Error('لا توجد إعدادات بريد مفعّلة على الخادم.');
+}
+
 function maskEmail(email) {
   const parts = String(email || '').split('@');
   if (parts.length !== 2) return '***';
@@ -649,7 +699,7 @@ const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر الت�
 app.post('/api/2fa/forgot/start', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
-  if (!mailTransporter) return res.status(500).json({ data: null, error: { message: 'ميزة استعادة كلمة المرور غير مفعّلة على الخادم بعد (إعدادات البريد SMTP ناقصة). تواصل مع الدعم الفني.' } });
+  if (!MAIL_CONFIGURED) return res.status(500).json({ data: null, error: { message: 'ميزة استعادة كلمة المرور غير مفعّلة على الخادم بعد (إعدادات البريد ناقصة). تواصل مع الدعم الفني.' } });
   const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
   if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
   const { username } = req.body || {};
@@ -665,8 +715,7 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
     const codeHash = crypto.createHash('sha256').update(code).digest('hex');
     const ticket = signPurposeToken('password_reset_code', { uid: data.user_id, codeHash }, 10 * 60 * 1000);
 
-    await mailTransporter.sendMail({
-      from: SMTP_FROM,
+    await sendMailUnified({
       to: data.email,
       subject: 'رمز التحقق لإعادة تعيين كلمة المرور',
       text: `رمز التحقق الخاص بك هو: ${code}\nصالح لمدة 10 دقائق. إذا لم تطلب إعادة تعيين كلمة المرور، تجاهل هذه الرسالة.`,

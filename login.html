@@ -258,8 +258,11 @@ const Forgot = (function(){
 
   async function postJSON(url, body){
     let res;
-    try{ res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
-    catch(e){ return { data:null, error:{ message:'تعذّر الاتصال بالخادم.' } }; }
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(), 20000);
+    try{ res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body), signal: controller.signal }); }
+    catch(e){ return { data:null, error:{ message: (e && e.name==='AbortError') ? 'انتهت مهلة الاتصال بالخادم — حاول مرة أخرى.' : 'تعذّر الاتصال بالخادم.' } }; }
+    finally{ clearTimeout(timer); }
     try{ return await res.json(); }
     catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم (رمز الحالة: '+res.status+')' } }; }
   }
