@@ -728,8 +728,14 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
 
     return res.json({ data: { ticket, maskedEmail: maskEmail(data.email) }, error: null });
   } catch (e) {
-    console.error('تعذّر إرسال بريد استعادة كلمة المرور:', e.message || e);
-    return res.status(500).json({ data: null, error: { message: 'تعذّر إرسال البريد الإلكتروني. حاول لاحقًا أو تواصل مع الدعم الفني.' } });
+    console.error('تعذّر إرسال بريد استعادة كلمة المرور:', e && e.code, e && e.responseCode, e && e.message);
+    let msg = 'تعذّر إرسال البريد الإلكتروني. حاول لاحقًا أو تواصل مع الدعم الفني.';
+    if (e && (e.code === 'EAUTH' || e.responseCode === 535)) {
+      msg = 'تعذّر إرسال البريد: بيانات تسجيل الدخول (SMTP_USER أو SMTP_PASS) غير صحيحة. تأكد من أن SMTP_PASS هي كلمة مرور التطبيق (App Password) الصحيحة وأنها لم تُلغَ.';
+    } else if (e && (e.code === 'ECONNECTION' || e.code === 'ETIMEDOUT' || e.code === 'ESOCKET')) {
+      msg = 'تعذّر إرسال البريد: تعذّر الاتصال بخادم البريد. تأكد من صحة SMTP_HOST وSMTP_PORT.';
+    }
+    return res.status(500).json({ data: null, error: { message: msg } });
   }
 });
 
