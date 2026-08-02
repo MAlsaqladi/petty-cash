@@ -144,6 +144,26 @@ function fmtDateTime(d){
 }
 function money(n){ n=Number(n||0); return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2,numberingSystem:'latn'}) + ' ر.س'; }
 function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* إعادة رسم جسم نموذج مفتوح مع الحفاظ على تركيز الحقل الحالي وموضع المؤشر
+   بداخله. بدون هذا، أي إعادة رسم أثناء الكتابة (كل ضغطة زر بحقول الأرقام
+   والتواريخ) كانت تُدمّر عنصر الإدخال وتُنشئ غيره، فيفقد التركيز وتظهر
+   المشكلة المعروفة: يُكتب رقم واحد فقط ثم يتوقف الإدخال. */
+function rerenderKeepFocus(containerId, html){
+  const body = document.getElementById(containerId);
+  if(!body) return;
+  const active = document.activeElement;
+  const activeId = (active && body.contains(active) && active.id) ? active.id : null;
+  const selStart = (activeId && active.selectionStart != null) ? active.selectionStart : null;
+  const selEnd = (activeId && active.selectionEnd != null) ? active.selectionEnd : null;
+  body.innerHTML = html;
+  if(activeId){
+    const el = document.getElementById(activeId);
+    if(el){
+      el.focus();
+      if(selStart != null && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
+    }
+  }
+}
 function toast(msg, kind){
   const root = document.getElementById('toastRoot');
   const box = document.createElement('div');
@@ -848,8 +868,8 @@ Modals.renderAddTripBody = function(){
     <div class="field full"><label>اسم الرحلة (إنجليزي)</label><input type="text" value="${esc(d.trip_name_en)}" oninput="Modals.updateTripField('trip_name_en',this.value)"></div>
     <div class="field"><label>نوع الرحلة</label><select onchange="Modals.updateTripField('trip_type',this.value)">${typeOpts}</select></div>
     <div class="field"><label>إلى أين (الجهة)</label><select onchange="Modals.updateTripField('entity',this.value)">${entityOpts}</select></div>
-    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.start_date)}" oninput="Modals.updateTripDates('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.end_date)}" oninput="Modals.updateTripDates('end_date',this.value)"></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" id="dtStart" lang="en-GB" value="${esc(d.start_date)}" oninput="Modals.updateTripDates('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" id="dtEnd" lang="en-GB" value="${esc(d.end_date)}" oninput="Modals.updateTripDates('end_date',this.value)"></div>
     <div class="field full"><label>المبررات <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateTripField('justifications',this.value)">${esc(d.justifications)}</textarea></div>
     <div class="field full"><label>الأهداف المطلوب تحقيقها <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateTripField('desired_results',this.value)">${esc(d.desired_results)}</textarea></div>
     <div class="field full"><label>ملاحظات أخرى</label><textarea rows="2" oninput="Modals.updateTripField('other_notes',this.value)">${esc(d.other_notes)}</textarea></div>
@@ -877,8 +897,7 @@ Modals.updateTripField = function(key,val){
 };
 Modals.updateTripDates = function(key,val){
   TripDraft[key]=val;
-  const body = document.getElementById('addTripModalBody');
-  if(body) body.innerHTML = Modals.renderAddTripBody();
+  rerenderKeepFocus('addTripModalBody', Modals.renderAddTripBody());
   const saveBtn=document.getElementById('saveTripBtn');
   if(saveBtn) saveBtn.disabled = !isTripDraftValid(TripDraft);
 };
@@ -1515,8 +1534,8 @@ Modals.renderAddParticipantBody = function(){
 
   /* مطابق لتفاصيل الرحلة = نعم → إخفاء تواريخ/أيام/نقل/سكن كليًا (تُنسخ آليًا من الرحلة عند الحفظ) */
   const matchBlock = d.is_linked_to_trip ? '' : `
-    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
-    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" lang="en-GB" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
+    <div class="field"><label>تاريخ البداية <span class="muted">— إلزامي</span></label><input type="date" id="pgStart" lang="en-GB" value="${esc(d.start_date||'')}" oninput="Modals.updateParticipantField('start_date',this.value)"></div>
+    <div class="field"><label>تاريخ النهاية <span class="muted">— إلزامي</span></label><input type="date" id="pgEnd" lang="en-GB" value="${esc(d.end_date||'')}" oninput="Modals.updateParticipantField('end_date',this.value)"></div>
     <div class="field"><label>عدد الأيام (تلقائي)</label><input type="text" value="${esc(days||'—')}" disabled></div>
     <div class="field"><label>يشمل نقل؟</label><select onchange="Modals.updateParticipantField('is_transportation_available',this.value==='true')">
       <option value="false" ${!d.is_transportation_available?'selected':''}>لا</option><option value="true" ${d.is_transportation_available?'selected':''}>نعم</option></select></div>
@@ -1534,12 +1553,12 @@ Modals.renderAddParticipantBody = function(){
     ? `<div class="field"><label>نوع التذكرة <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('ticket_type',this.value)">${ticketOpts}</select></div>`
     : `<div class="field"><label>نوع التذكرة</label><input type="text" value="اقتصادية" disabled></div>`;
   const hoursBlock = resolvedType==='مدير تنفيذي'
-    ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="number" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="Modals.updateParticipantField('hours_count',this.value)"></div>`
+    ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="number" id="pgHours" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="Modals.updateParticipantField('hours_count',this.value)"></div>`
     : '';
 
   /* المبرر يظهر فقط إذا كانت غير مطابقة لتفاصيل الرحلة */
   const justificationBlock = !d.is_linked_to_trip
-    ? `<div class="field full"><label>المبرر <span class="muted">— إلزامي</span></label><textarea rows="2" oninput="Modals.updateParticipantField('justification',this.value)">${esc(d.justification)}</textarea></div>`
+    ? `<div class="field full"><label>المبرر <span class="muted">— إلزامي</span></label><textarea rows="2" id="pgJustification" oninput="Modals.updateParticipantField('justification',this.value)">${esc(d.justification)}</textarea></div>`
     : '';
 
   return `
@@ -1574,8 +1593,7 @@ Modals.updateParticipantField = function(key,val){
     const su = userById(val);
     ParticipantDraft.user_type_filter = su ? su.user_type : '';
   }
-  const body = document.getElementById('addParticipantModalBody');
-  if(body) body.innerHTML = Modals.renderAddParticipantBody();
+  rerenderKeepFocus('addParticipantModalBody', Modals.renderAddParticipantBody());
 };
 Actions.saveParticipant = async function(){
   if(SubmitLock.saveParticipant) return;
@@ -1708,7 +1726,7 @@ Modals.renderTicketInfoBody = function(){
     : '';
   return `
     <div class="form-grid">
-      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي${carEligible&&d.is_car_traveler?' — يُحتسب 75% منه فقط':''}</span></label><input type="number" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateTicketInfoField('ticket_price',this.value)"></div>
+      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي${carEligible&&d.is_car_traveler?' — يُحتسب 75% منه فقط':''}</span></label><input type="number" id="tiPrice" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateTicketInfoField('ticket_price',this.value)"></div>
       ${carBlock}
       <div class="field full"><label>مرفق (صورة/PDF للتذكرة) <span class="muted">— إلزامي</span></label><input type="file" id="tiFile" accept="image/*,.pdf"></div>
     </div>
@@ -1717,8 +1735,7 @@ Modals.renderTicketInfoBody = function(){
 };
 Modals.updateTicketInfoField = function(key,val){
   TicketInfoDraft[key] = val;
-  const body = document.getElementById('ticketInfoModalBody');
-  if(body) body.innerHTML = Modals.renderTicketInfoBody();
+  rerenderKeepFocus('ticketInfoModalBody', Modals.renderTicketInfoBody());
 };
 Actions.submitTicketInfo = async function(){
   if(SubmitLock.submitTicketInfo) return;

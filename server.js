@@ -32,8 +32,7 @@ const crypto = require('crypto');
 const compression = require('compression');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
-const OTPAuth = require('otpauth');
-const QRCode = require('qrcode');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,6 +50,34 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } })
   : null;
+
+/* =========================================================================
+   إرسال البريد (لميزة "نسيت كلمة المرور") — يتطلب متغيّرات بيئة SMTP على
+   Render → Environment: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS، واختياريًا
+   SMTP_FROM (وإلا يُستخدم SMTP_USER) و SMTP_SECURE=true إن كان المنفذ 465.
+   ========================================================================= */
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+let mailTransporter = null;
+if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+  mailTransporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+} else {
+  console.warn('⚠ تحذير: إعدادات SMTP غير مكتملة (SMTP_HOST/SMTP_USER/SMTP_PASS). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف هذه المتغيرات في Render → Environment.');
+}
+function maskEmail(email) {
+  const parts = String(email || '').split('@');
+  if (parts.length !== 2) return '***';
+  const user = parts[0];
+  const masked = user.length <= 2 ? user[0] + '*' : user.slice(0, 2) + '*'.repeat(Math.max(1, user.length - 2));
+  return masked + '@' + parts[1];
+}
 
 /* =========================================================================
    رمز الجلسة (Session token) — HMAC موقَّع بمفتاح سرّي على الخادم فقط.
@@ -603,16 +630,15 @@ app.get('/api/has-users', async (req, res) => {
 });
 
 /* =========================================================================
-   استعادة كلمة المرور بالمصادقة الثنائية (TOTP + رمز QR) — ثلاث مراحل:
-   1) forgot/start:  التحقق من اسم المستخدم + رقم الهوية الوطنية معًا (وليس
-      اسم المستخدم وحده) هو ما يثبت هوية صاحب الحساب هنا؛ إن تطابقا، يُنشئ
-      الخادم سرًّا جديدًا للمصادقة الثنائية ويُعيد رمز QR لمسحه بتطبيق مصادقة
-      (Google/Microsoft Authenticator) مع تذكرة موقّعة صالحة 5 دقائق تحمل هذا
-      السرّ (السرّ لا يُخزَّن في قاعدة البيانات إطلاقًا — فقط داخل التذكرة
-      الموقّعة على العميل، ولا قيمة له بعد انتهاء صلاحيتها).
-   2) forgot/verify: يتحقق من الرمز المكوَّن من 6 أرقام المُدخل مقابل نفس
-      السرّ، ثم يُصدر تذكرة ثانية محدودة الغرض (password_reset) صالحة أيضًا
-      5 دقائق فقط.
+   استعادة كلمة المرور برمز تحقق عبر البريد الإلكتروني — ثلاث مراحل:
+   1) forgot/start:  يبحث عن المستخدم باسمه، ويُنشئ رمزًا عشوائيًا من 6 أرقام،
+      ويرسله فعليًا إلى البريد الإلكتروني المسجَّل على حسابه (وليس لأي عنوان
+      آخر). لا يُخزَّن الرمز في قاعدة البيانات — فقط بصمة (hash) منه داخل
+      تذكرة موقّعة صالحة 10 دقائق يحملها العميل. الرد لا يحتوي الرمز نفسه
+      إطلاقًا ولا حتى البريد كاملاً (بريد مقنَّع فقط) — إثبات الهوية الحقيقي
+      هنا هو الوصول الفعلي لصندوق البريد المسجَّل، وليس معرفة اسم المستخدم.
+   2) forgot/verify: يقارن بصمة الرمز المُدخل ببصمة التذكرة، ثم يُصدر تذكرة
+      ثانية محدودة الغرض (password_reset) صالحة 5 دقائق.
    3) forgot/reset:  يستخدم تذكرة password_reset لتعيين كلمة مرور جديدة
       مباشرة عبر hash_password، دون الحاجة لمعرفة كلمة المرور القديمة.
    كل مرحلة مقيّدة بمعدّل محاولات لكل IP، وردود الخطأ عامة الصياغة لتفادي
@@ -623,6 +649,7 @@ const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر الت�
 app.post('/api/2fa/forgot/start', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
+  if (!mailTransporter) return res.status(500).json({ data: null, error: { message: 'ميزة استعادة كلمة المرور غير مفعّلة على الخادم بعد (إعدادات البريد SMTP ناقصة). تواصل مع الدعم الفني.' } });
   const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
   if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
   const { username } = req.body || {};
@@ -632,15 +659,28 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
     if (error || !data) return res.status(400).json(GENERIC_FORGOT_ERROR);
     if (data.user_status !== 'مفتوح') return res.status(400).json(GENERIC_FORGOT_ERROR);
     if (NO_LOGIN_USER_TYPES.has(data.user_type)) return res.status(400).json(GENERIC_FORGOT_ERROR);
+    if (!data.email) return res.status(400).json({ data: null, error: { message: 'لا يوجد بريد إلكتروني مسجَّل على هذا الحساب — تواصل مع إدارة النظام.' } });
 
-    const secret = new OTPAuth.Secret({ size: 20 });
-    const totp = new OTPAuth.TOTP({ issuer: 'نظام إدارة الاتحادات', label: data.user_name, algorithm: 'SHA1', digits: 6, period: 30, secret });
-    const qr = await QRCode.toDataURL(totp.toString(), { margin: 1, width: 240 });
-    const ticket = signPurposeToken('2fa_setup', { uid: data.user_id, secret: secret.base32 }, 5 * 60 * 1000);
-    return res.json({ data: { qr, ticket, manualKey: secret.base32 }, error: null });
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const ticket = signPurposeToken('password_reset_code', { uid: data.user_id, codeHash }, 10 * 60 * 1000);
+
+    await mailTransporter.sendMail({
+      from: SMTP_FROM,
+      to: data.email,
+      subject: 'رمز التحقق لإعادة تعيين كلمة المرور',
+      text: `رمز التحقق الخاص بك هو: ${code}\nصالح لمدة 10 دقائق. إذا لم تطلب إعادة تعيين كلمة المرور، تجاهل هذه الرسالة.`,
+      html: `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;">
+        <p>رمز التحقق الخاص بك لإعادة تعيين كلمة المرور:</p>
+        <p style="font-size:28px;font-weight:bold;letter-spacing:6px;">${code}</p>
+        <p style="color:#666;">صالح لمدة 10 دقائق. إذا لم تطلب إعادة تعيين كلمة المرور، تجاهل هذه الرسالة.</p>
+      </div>`,
+    });
+
+    return res.json({ data: { ticket, maskedEmail: maskEmail(data.email) }, error: null });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json(GENERIC_FORGOT_ERROR);
+    console.error('تعذّر إرسال بريد استعادة كلمة المرور:', e.message || e);
+    return res.status(500).json({ data: null, error: { message: 'تعذّر إرسال البريد الإلكتروني. حاول لاحقًا أو تواصل مع الدعم الفني.' } });
   }
 });
 
@@ -649,12 +689,14 @@ app.post('/api/2fa/forgot/verify', async (req, res) => {
   const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
   if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
   const { ticket, code } = req.body || {};
-  const claims = verifyPurposeToken(ticket, '2fa_setup');
+  const claims = verifyPurposeToken(ticket, 'password_reset_code');
   if (!claims) return res.status(400).json({ data: null, error: { message: 'انتهت صلاحية الجلسة، الرجاء البدء من جديد.' } });
   try {
-    const totp = new OTPAuth.TOTP({ algorithm: 'SHA1', digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(claims.secret) });
-    const delta = totp.validate({ token: String(code || '').trim(), window: 1 });
-    if (delta === null) return res.status(400).json({ data: null, error: { message: 'الرمز غير صحيح.' } });
+    const submittedHash = crypto.createHash('sha256').update(String(code || '').trim()).digest('hex');
+    const a = Buffer.from(submittedHash);
+    const b = Buffer.from(claims.codeHash || '');
+    const match = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!match) return res.status(400).json({ data: null, error: { message: 'الرمز غير صحيح.' } });
     const resetTicket = signPurposeToken('password_reset', { uid: claims.uid }, 5 * 60 * 1000);
     return res.json({ data: { resetTicket }, error: null });
   } catch (e) {
@@ -675,7 +717,7 @@ app.post('/api/2fa/forgot/reset', async (req, res) => {
     if (hashErr) return res.status(500).json({ data: null, error: { message: 'تعذّر تجهيز كلمة المرور.' } });
     const { error } = await supabase.from('users').update({ password: hashed }).eq('user_id', claims.uid);
     if (error) return res.status(500).json({ data: null, error: { message: error.message } });
-    await logAudit({ user: { user_id: claims.uid, employee_name_ar: null, federation_id: null }, action: 'forgotPasswordReset', success: true, targetTable: 'users', targetId: claims.uid, message: 'إعادة تعيين كلمة المرور عبر التحقق الثنائي (نسيت كلمة المرور)', ip });
+    await logAudit({ user: { user_id: claims.uid, employee_name_ar: null, federation_id: null }, action: 'forgotPasswordReset', success: true, targetTable: 'users', targetId: claims.uid, message: 'إعادة تعيين كلمة المرور عبر رمز التحقق المُرسَل بالبريد الإلكتروني', ip });
     return res.json({ data: { ok: true }, error: null });
   } catch (e) {
     console.error(e);

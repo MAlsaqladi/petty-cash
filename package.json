@@ -15,8 +15,7 @@
     "compression": "^1.7.4",
     "express": "^4.19.2",
     "multer": "^2.0.0",
-    "otpauth": "^9.5.1",
-    "qrcode": "^1.5.4"
+    "nodemailer": "^9.0.3"
   },
   "keywords": [],
   "author": "",
