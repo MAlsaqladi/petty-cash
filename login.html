@@ -106,10 +106,6 @@
           <label>اسم المستخدم</label>
           <input type="text" id="fgUser" placeholder="اسم المستخدم" autocomplete="username">
         </div>
-        <div class="field">
-          <label>رقم الهوية الوطنية</label>
-          <input type="text" id="fgNationalId" placeholder="رقم الهوية الوطنية" inputmode="numeric">
-        </div>
         <button class="btn btn-primary btn-block" id="fgStartBtn" onclick="Forgot.start()">متابعة</button>
         <div id="fgAlert1"></div>
       </div>
@@ -251,7 +247,6 @@ const Forgot = (function(){
   function open(){
     ticket = null; resetTicket = null;
     document.getElementById('fgUser').value = '';
-    document.getElementById('fgNationalId').value = '';
     document.getElementById('fgCode').value = '';
     document.getElementById('fgNewPass').value = '';
     document.getElementById('fgNewPass2').value = '';
@@ -273,14 +268,13 @@ const Forgot = (function(){
 
   async function start(){
     const username = document.getElementById('fgUser').value.trim();
-    const nationalId = document.getElementById('fgNationalId').value.trim();
     alertBox('fgAlert1','');
-    if(!username || !nationalId){ alertBox('fgAlert1','الرجاء إدخال اسم المستخدم ورقم الهوية الوطنية.'); return; }
+    if(!username){ alertBox('fgAlert1','الرجاء إدخال اسم المستخدم.'); return; }
     const btn = document.getElementById('fgStartBtn');
     btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
-    const { data, error } = await postJSON('/api/2fa/forgot/start', { username, nationalId });
+    const { data, error } = await postJSON('/api/2fa/forgot/start', { username });
     btn.disabled = false; btn.textContent = 'متابعة';
-    if(error || !data){ alertBox('fgAlert1', (error&&error.message)||'تعذّر التحقق من البيانات.'); return; }
+    if(error || !data){ alertBox('fgAlert1', (error&&error.message)||'تعذّر التحقق من اسم المستخدم.'); return; }
     ticket = data.ticket;
     document.getElementById('fgQrImg').src = data.qr;
     document.getElementById('fgManualKey').textContent = data.manualKey;

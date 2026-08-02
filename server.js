@@ -446,17 +446,20 @@ const ACTIONS = {
       throw new ActionError(`أنت موجود ضمن المشتركين بالانتداب ولم تتم الموافقة عليك بعد، يرجى التواصل مع ${other} للاعتماد`, 403);
     }
     await updateRow('trips', 'trip_id', tripId, { trip_status: 'قيد الصرف', request_approved_by: user.user_id, request_approval_date: nowISO() });
+    // اعتماد قرار التكليف ينقل كل مشارك ممكن اعتماده (بلا تعارض مصالح) إلى
+    // "قيد الصرف" — بانتظار أن يُدخل المحاسب سعر تذكرته ومرفقها، وليس إلى
+    // "معتمد" مباشرة؛ الاعتماد النهائي يأتي لاحقًا بعد إدخال بيانات التذكرة.
     const pending = participants.filter(p => p.delegations_status === 'غير معتمد');
     let approvedCount = 0;
     for (const p of pending) {
       const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
       if (canApproveParticipantRecord(user, p, pUser)) {
-        await updateRow('delegations', 'delegation_id', p.delegation_id, { delegations_status: 'معتمد', request_approved_by: user.user_id, request_approval_date: nowISO() });
+        await updateRow('delegations', 'delegation_id', p.delegation_id, { delegations_status: 'قيد الصرف', request_approved_by: user.user_id, request_approval_date: nowISO() });
         approvedCount++;
       }
     }
     const remaining = pending.length - approvedCount;
-    return { targetTable: 'trips', targetId: tripId, message: `تم اعتماد التكليف${approvedCount ? ` واعتماد ${approvedCount} مشارك` : ''}${remaining ? ` — ${remaining} مشارك بحاجة لموافقة مستقلة` : ''}` };
+    return { targetTable: 'trips', targetId: tripId, message: `تم اعتماد التكليف${approvedCount ? ` وانتقال ${approvedCount} مشارك لمرحلة إدخال بيانات التذكرة` : ''}${remaining ? ` — ${remaining} مشارك بحاجة لموافقة مستقلة` : ''}` };
   },
 
   async rejectTrip({ user }, { tripId }) {
@@ -474,44 +477,37 @@ const ACTIONS = {
     return { targetTable: 'trips', targetId: tripId, message: 'تم رفض طلب الرحلة' };
   },
 
-  /* المرحلة الأخيرة — اعتماد الصرف النهائي وإقفال الرحلة، ولا تكون إلا من
-     حالة "قيد اعتماد الصرف" (أي بعد إدخال المحاسب لكل بيانات التذاكر) ومن
-     صلاحية المدير التنفيذي حصرًا؛ إن كان هو نفسه من ضمن المشاركين تنتقل
-     الصلاحية لرئيس الاتحاد تجنبًا لتعارض المصالح — تمامًا كنفس المبدأ
-     المتّبع في بقية إجراءات هذا النظام. */
+  /* إقفال الرحلة — بعد اعتماد قرار التكليف (الرحلة "قيد الصرف")، ولا يجوز
+     إلا إذا لم يبقَ أي مشارك بانتظار إدخال بيانات تذكرته ("قيد الصرف") أو
+     بانتظار الاعتماد النهائي ("غير معتمد")، وكل المصاريف الأخرى محسومة. */
   async closeTrip({ user }, { tripId, achieved }) {
     const t = await getRow('trips', 'trip_id', tripId);
     if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
-    if (t.trip_status !== 'قيد اعتماد الصرف') throw new ActionError('الرحلة ليست بانتظار اعتماد الصرف النهائي', 400);
+    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية الإقفال', 403);
+    if (t.trip_status !== 'قيد الصرف') throw new ActionError('الرحلة ليست بانتظار الإقفال', 400);
     const participants = await getRows('delegations', { trip_id: tripId });
-    const ownRecord = participants.find(p => p.user_id === user.user_id && p.delegations_status !== 'مرفوض');
-    let allowed;
-    if (ownRecord) {
-      allowed = SPerm.isPresident(user);
-      if (!allowed) throw new ActionError('أنت موجود ضمن المشاركين — اعتماد الصرف النهائي لهذه الرحلة يتطلب رئيس الاتحاد تجنبًا لتعارض المصالح', 403);
-    } else {
-      allowed = SPerm.isExec(user);
-      if (!allowed) throw new ActionError('اعتماد الصرف النهائي وإقفال الرحلة من صلاحية المدير التنفيذي فقط', 403);
-    }
     const otherExpenses = await getRows('other_expenses', { trip_id: tripId });
+    const pendingP = participants.filter(p => p.delegations_status === 'غير معتمد' || p.delegations_status === 'قيد الصرف').length;
     const pendingE = otherExpenses.filter(e => e.expense_status === 'غير معتمد').length;
-    if (pendingE > 0) throw new ActionError('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المصاريف الأخرى المعلّقة', 400);
+    if (pendingP > 0 || pendingE > 0) throw new ActionError('لا يمكن الإقفال قبل البتّ في كل المشاركين (اعتماد/رفض وإدخال بيانات تذاكرهم) وكل المصاريف الأخرى المعلّقة', 400);
     const achievedText = (achieved || '').trim();
     if (!achievedText) throw new ActionError('الرجاء تسجيل الأهداف المحققة قبل الإقفال', 400);
     await updateRow('trips', 'trip_id', tripId, { trip_status: 'مغلقة', achieved_results: achievedText, closure_approved_by: user.user_id, closure_approval_date: nowISO() });
-    return { targetTable: 'trips', targetId: tripId, message: 'تم اعتماد الصرف وإقفال الرحلة' };
+    return { targetTable: 'trips', targetId: tripId, message: 'تم إقفال الرحلة' };
   },
 
-  /* المحاسب فقط، وحصرًا أثناء حالة "قيد الصرف"، يدخل سعر التذكرة وصورتها لكل
-     مشارك معتمد — هذا هو التعديل الوحيد المسموح به بعد اعتماد قرار التكليف. */
+  /* المحاسب فقط، وحصرًا لمشارك بحالة "قيد الصرف" (أي بعد اعتماد قرار
+     التكليف)، يدخل سعر التذكرة ومرفقها — هذا هو التعديل الوحيد المسموح به
+     على سجل المشارك بعد اعتماد قرار التكليف. بعد الحفظ تعود حالة المشارك
+     إلى "غير معتمد" لتحتاج اعتماد رئيس الاتحاد أو المدير التنفيذي النهائي. */
   async submitTicketInfo({ user }, { delegationId, ticketPrice, isCarTraveler, filePath }) {
     if (!SPerm.isAccountant(user)) throw new ActionError('إدخال بيانات التذكرة من صلاحية المحاسب فقط', 403);
     const p = await getRow('delegations', 'delegation_id', delegationId);
     if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
     const t = await getRow('trips', 'trip_id', p.trip_id);
     if (!t) throw new ActionError('الرحلة غير موجودة', 404);
-    if (t.trip_status !== 'قيد الصرف') throw new ActionError('لا يمكن إدخال بيانات التذكرة إلا في مرحلة "قرار التكليف موافق — بانتظار الصرف"', 400);
-    if (p.delegations_status !== 'معتمد') throw new ActionError('لا يمكن إدخال بيانات التذكرة لمشارك لم تتم الموافقة عليه بعد', 400);
+    if (t.trip_status !== 'قيد الصرف') throw new ActionError('لا يمكن إدخال بيانات التذكرة إلا بعد اعتماد قرار التكليف', 400);
+    if (p.delegations_status !== 'قيد الصرف') throw new ActionError('لا يمكن إدخال بيانات التذكرة لهذا المشارك في حالته الحالية', 400);
     const price = Number(ticketPrice);
     if (!(price >= 0)) throw new ActionError('أدخل سعر تذكرة صحيح', 400);
     if (!filePath) throw new ActionError('يجب إرفاق صورة التذكرة', 400);
@@ -521,37 +517,23 @@ const ACTIONS = {
     const newTotal = effectiveTicketCost + Number(p.amount_delegations || 0);
     await updateRow('delegations', 'delegation_id', delegationId, {
       ticket_price: price, is_car_traveler: isCar, file: filePath,
-      ticket_submitted: true, total_amount: newTotal,
+      ticket_submitted: true, total_amount: newTotal, delegations_status: 'غير معتمد',
     });
-    return { targetTable: 'delegations', targetId: delegationId, message: 'تم حفظ بيانات التذكرة' };
+    return { targetTable: 'delegations', targetId: delegationId, message: 'تم حفظ بيانات التذكرة — بانتظار اعتماد رئيس الاتحاد أو المدير التنفيذي' };
   },
 
-  /* المحاسب يرسل الرحلة لاعتماد الصرف النهائي بعد إدخال بيانات تذاكر كل
-     المشاركين المعتمدين، والبتّ في كل المشاركين المعلّقين. */
-  async submitForDisbursementApproval({ user }, { tripId }) {
-    if (!SPerm.isAccountant(user)) throw new ActionError('إرسال الطلب لاعتماد الصرف من صلاحية المحاسب فقط', 403);
-    const t = await getRow('trips', 'trip_id', tripId);
-    if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
-    if (t.trip_status !== 'قيد الصرف') throw new ActionError('الرحلة ليست بانتظار إدخال بيانات الصرف', 400);
-    const participants = await getRows('delegations', { trip_id: tripId });
-    const stillPending = participants.filter(p => p.delegations_status === 'غير معتمد').length;
-    if (stillPending > 0) throw new ActionError('لا يمكن الإرسال قبل البتّ في كل المشاركين المعلّقين (اعتماد أو رفض)', 400);
-    const approved = participants.filter(p => p.delegations_status === 'معتمد');
-    if (!approved.length) throw new ActionError('لا يوجد مشاركون معتمدون لإرسال طلب الصرف', 400);
-    const missing = approved.filter(p => !p.ticket_submitted);
-    if (missing.length) throw new ActionError(`يوجد ${missing.length} مشارك لم تُدخل بيانات تذكرته بعد`, 400);
-    await updateRow('trips', 'trip_id', tripId, { trip_status: 'قيد اعتماد الصرف' });
-    return { targetTable: 'trips', targetId: tripId, message: 'تم إرسال الطلب لاعتماد الصرف' };
-  },
-
+  /* اعتماد مشارك — يُستخدم في جولتَي الاعتماد كلتيهما: اعتماد قرار التكليف
+     (قبل إدخال بيانات التذكرة) واعتماد الصرف النهائي (بعدها)، والفرق بينهما
+     هو ما إذا أُدخلت بيانات التذكرة (ticket_submitted) أم لا بعد. */
   async approveParticipant({ user }, { delegationId }) {
     const p = await getRow('delegations', 'delegation_id', delegationId);
     if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
     const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
     if (!canApproveParticipantRecord(user, p, pUser)) throw new ActionError('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)', 403);
     if (p.delegations_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المشارك بالفعل', 400);
-    await updateRow('delegations', 'delegation_id', delegationId, { delegations_status: 'معتمد', request_approved_by: user.user_id, request_approval_date: nowISO() });
-    return { targetTable: 'delegations', targetId: delegationId, message: 'تم اعتماد المشارك' };
+    const nextStatus = p.ticket_submitted ? 'معتمد' : 'قيد الصرف';
+    await updateRow('delegations', 'delegation_id', delegationId, { delegations_status: nextStatus, request_approved_by: user.user_id, request_approval_date: nowISO() });
+    return { targetTable: 'delegations', targetId: delegationId, message: nextStatus === 'معتمد' ? 'تم اعتماد الصرف النهائي للمشارك' : 'تم اعتماد المشارك — بانتظار إدخال المحاسب لبيانات التذكرة' };
   },
 
   async rejectParticipant({ user }, { delegationId }) {
@@ -634,23 +616,22 @@ app.get('/api/has-users', async (req, res) => {
    3) forgot/reset:  يستخدم تذكرة password_reset لتعيين كلمة مرور جديدة
       مباشرة عبر hash_password، دون الحاجة لمعرفة كلمة المرور القديمة.
    كل مرحلة مقيّدة بمعدّل محاولات لكل IP، وردود الخطأ عامة الصياغة لتفادي
-   تسريب أي معلومة عن وجود اسم مستخدم أو رقم هوية معيّن من عدمه.
+   تسريب أي معلومة عن وجود اسم مستخدم معيّن من عدمه.
    ========================================================================= */
-const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر التحقق من البيانات المدخلة. تأكد من اسم المستخدم ورقم الهوية الوطنية.' } };
+const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر التحقق من اسم المستخدم المدخل.' } };
 
 app.post('/api/2fa/forgot/start', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
   const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
   if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
-  const { username, nationalId } = req.body || {};
-  if (!username || !nationalId) return res.status(400).json(GENERIC_FORGOT_ERROR);
+  const { username } = req.body || {};
+  if (!username) return res.status(400).json(GENERIC_FORGOT_ERROR);
   try {
     const { data, error } = await supabase.from('users_public').select('*').eq('user_name', String(username).trim()).maybeSingle();
     if (error || !data) return res.status(400).json(GENERIC_FORGOT_ERROR);
     if (data.user_status !== 'مفتوح') return res.status(400).json(GENERIC_FORGOT_ERROR);
     if (NO_LOGIN_USER_TYPES.has(data.user_type)) return res.status(400).json(GENERIC_FORGOT_ERROR);
-    if (!data.national_id || String(data.national_id).trim() !== String(nationalId).trim()) return res.status(400).json(GENERIC_FORGOT_ERROR);
 
     const secret = new OTPAuth.Secret({ size: 20 });
     const totp = new OTPAuth.TOTP({ issuer: 'نظام إدارة الاتحادات', label: data.user_name, algorithm: 'SHA1', digits: 6, period: 30, secret });
