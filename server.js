@@ -32,6 +32,8 @@ const crypto = require('crypto');
 const compression = require('compression');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const OTPAuth = require('otpauth');
+const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -88,27 +90,44 @@ function verifyToken(token) {
   }
 }
 
-/* =========================================================================
-   تحديد معدّل محاولات تسجيل الدخول (حماية من التخمين الآلي لكلمة المرور)
-   ========================================================================= */
-const LOGIN_WINDOW_MS = 10 * 60 * 1000; // 10 دقائق
-const LOGIN_MAX_ATTEMPTS = 12;
-const loginAttempts = new Map(); // ip -> { count, resetAt }
-function checkLoginRateLimit(ip) {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-    return true;
-  }
-  entry.count += 1;
-  return entry.count <= LOGIN_MAX_ATTEMPTS;
+/* رمز محدود الغرض (purpose token) — نفس آلية توقيع الجلسة، لكن بحقل "purpose"
+   إضافي حتى لا يمكن استخدام رمز الجلسة الحقيقي مكان رمز استعادة كلمة المرور
+   والعكس، ولا استخدام رمز إحدى مرحلتي الاستعادة مكان الأخرى. */
+function signPurposeToken(purpose, payloadObj, ttlMs) {
+  return signToken(Object.assign({}, payloadObj, { purpose, exp: Date.now() + ttlMs }));
 }
-// تنظيف دوري بسيط لمنع تضخّم الذاكرة
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip);
-}, 30 * 60 * 1000).unref();
+function verifyPurposeToken(token, purpose) {
+  const obj = verifyToken(token);
+  if (!obj || obj.purpose !== purpose) return null;
+  return obj;
+}
+
+/* =========================================================================
+   تحديد معدّل المحاولات (حماية من التخمين الآلي) — لتسجيل الدخول ولمسارات
+   استعادة كلمة المرور عبر المصادقة الثنائية على حدّ سواء.
+   ========================================================================= */
+const RATE_WINDOW_MS = 10 * 60 * 1000; // 10 دقائق
+function makeRateLimiter(maxAttempts, windowMs) {
+  const store = new Map(); // ip -> { count, resetAt }
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, e] of store) if (now > e.resetAt) store.delete(ip);
+  }, 30 * 60 * 1000).unref();
+  return function check(ip) {
+    const now = Date.now();
+    const entry = store.get(ip);
+    if (!entry || now > entry.resetAt) {
+      store.set(ip, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    entry.count += 1;
+    return entry.count <= maxAttempts;
+  };
+}
+const checkLoginRateLimit = makeRateLimiter(12, RATE_WINDOW_MS);
+// مسارات استعادة كلمة المرور بالمصادقة الثنائية — نفس مبدأ تحديد المعدّل، بحد أعلى أقل
+// لأنها عملية حسّاسة (تنتهي بتغيير كلمة المرور)
+const checkForgotRateLimit = makeRateLimiter(8, RATE_WINDOW_MS);
 
 /* =========================================================================
    الجداول المسموحة، والحقول القابلة للإدخال/التعديل لكل جدول، وعمود
@@ -455,19 +474,74 @@ const ACTIONS = {
     return { targetTable: 'trips', targetId: tripId, message: 'تم رفض طلب الرحلة' };
   },
 
+  /* المرحلة الأخيرة — اعتماد الصرف النهائي وإقفال الرحلة، ولا تكون إلا من
+     حالة "قيد اعتماد الصرف" (أي بعد إدخال المحاسب لكل بيانات التذاكر) ومن
+     صلاحية المدير التنفيذي حصرًا؛ إن كان هو نفسه من ضمن المشاركين تنتقل
+     الصلاحية لرئيس الاتحاد تجنبًا لتعارض المصالح — تمامًا كنفس المبدأ
+     المتّبع في بقية إجراءات هذا النظام. */
   async closeTrip({ user }, { tripId, achieved }) {
     const t = await getRow('trips', 'trip_id', tripId);
     if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
-    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية الإقفال', 403);
+    if (t.trip_status !== 'قيد اعتماد الصرف') throw new ActionError('الرحلة ليست بانتظار اعتماد الصرف النهائي', 400);
     const participants = await getRows('delegations', { trip_id: tripId });
+    const ownRecord = participants.find(p => p.user_id === user.user_id && p.delegations_status !== 'مرفوض');
+    let allowed;
+    if (ownRecord) {
+      allowed = SPerm.isPresident(user);
+      if (!allowed) throw new ActionError('أنت موجود ضمن المشاركين — اعتماد الصرف النهائي لهذه الرحلة يتطلب رئيس الاتحاد تجنبًا لتعارض المصالح', 403);
+    } else {
+      allowed = SPerm.isExec(user);
+      if (!allowed) throw new ActionError('اعتماد الصرف النهائي وإقفال الرحلة من صلاحية المدير التنفيذي فقط', 403);
+    }
     const otherExpenses = await getRows('other_expenses', { trip_id: tripId });
-    const pendingP = participants.filter(p => p.delegations_status === 'غير معتمد').length;
     const pendingE = otherExpenses.filter(e => e.expense_status === 'غير معتمد').length;
-    if (pendingP > 0 || pendingE > 0) throw new ActionError('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المشاركين والمصاريف الأخرى المعلّقة', 400);
+    if (pendingE > 0) throw new ActionError('لا يمكن الإقفال قبل اعتماد أو رفض/حذف كل المصاريف الأخرى المعلّقة', 400);
     const achievedText = (achieved || '').trim();
     if (!achievedText) throw new ActionError('الرجاء تسجيل الأهداف المحققة قبل الإقفال', 400);
     await updateRow('trips', 'trip_id', tripId, { trip_status: 'مغلقة', achieved_results: achievedText, closure_approved_by: user.user_id, closure_approval_date: nowISO() });
-    return { targetTable: 'trips', targetId: tripId, message: 'تم إقفال الرحلة' };
+    return { targetTable: 'trips', targetId: tripId, message: 'تم اعتماد الصرف وإقفال الرحلة' };
+  },
+
+  /* المحاسب فقط، وحصرًا أثناء حالة "قيد الصرف"، يدخل سعر التذكرة وصورتها لكل
+     مشارك معتمد — هذا هو التعديل الوحيد المسموح به بعد اعتماد قرار التكليف. */
+  async submitTicketInfo({ user }, { delegationId, ticketPrice, isCarTraveler, filePath }) {
+    if (!SPerm.isAccountant(user)) throw new ActionError('إدخال بيانات التذكرة من صلاحية المحاسب فقط', 403);
+    const p = await getRow('delegations', 'delegation_id', delegationId);
+    if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
+    const t = await getRow('trips', 'trip_id', p.trip_id);
+    if (!t) throw new ActionError('الرحلة غير موجودة', 404);
+    if (t.trip_status !== 'قيد الصرف') throw new ActionError('لا يمكن إدخال بيانات التذكرة إلا في مرحلة "قرار التكليف موافق — بانتظار الصرف"', 400);
+    if (p.delegations_status !== 'معتمد') throw new ActionError('لا يمكن إدخال بيانات التذكرة لمشارك لم تتم الموافقة عليه بعد', 400);
+    const price = Number(ticketPrice);
+    if (!(price >= 0)) throw new ActionError('أدخل سعر تذكرة صحيح', 400);
+    if (!filePath) throw new ActionError('يجب إرفاق صورة التذكرة', 400);
+    const carEligible = t.entity === 'المملكة';
+    const isCar = carEligible ? !!isCarTraveler : false;
+    const effectiveTicketCost = isCar ? price * 0.75 : price;
+    const newTotal = effectiveTicketCost + Number(p.amount_delegations || 0);
+    await updateRow('delegations', 'delegation_id', delegationId, {
+      ticket_price: price, is_car_traveler: isCar, file: filePath,
+      ticket_submitted: true, total_amount: newTotal,
+    });
+    return { targetTable: 'delegations', targetId: delegationId, message: 'تم حفظ بيانات التذكرة' };
+  },
+
+  /* المحاسب يرسل الرحلة لاعتماد الصرف النهائي بعد إدخال بيانات تذاكر كل
+     المشاركين المعتمدين، والبتّ في كل المشاركين المعلّقين. */
+  async submitForDisbursementApproval({ user }, { tripId }) {
+    if (!SPerm.isAccountant(user)) throw new ActionError('إرسال الطلب لاعتماد الصرف من صلاحية المحاسب فقط', 403);
+    const t = await getRow('trips', 'trip_id', tripId);
+    if (!t || t.federation_number !== user.federation_id) throw new ActionError('الرحلة غير موجودة', 404);
+    if (t.trip_status !== 'قيد الصرف') throw new ActionError('الرحلة ليست بانتظار إدخال بيانات الصرف', 400);
+    const participants = await getRows('delegations', { trip_id: tripId });
+    const stillPending = participants.filter(p => p.delegations_status === 'غير معتمد').length;
+    if (stillPending > 0) throw new ActionError('لا يمكن الإرسال قبل البتّ في كل المشاركين المعلّقين (اعتماد أو رفض)', 400);
+    const approved = participants.filter(p => p.delegations_status === 'معتمد');
+    if (!approved.length) throw new ActionError('لا يوجد مشاركون معتمدون لإرسال طلب الصرف', 400);
+    const missing = approved.filter(p => !p.ticket_submitted);
+    if (missing.length) throw new ActionError(`يوجد ${missing.length} مشارك لم تُدخل بيانات تذكرته بعد`, 400);
+    await updateRow('trips', 'trip_id', tripId, { trip_status: 'قيد اعتماد الصرف' });
+    return { targetTable: 'trips', targetId: tripId, message: 'تم إرسال الطلب لاعتماد الصرف' };
   },
 
   async approveParticipant({ user }, { delegationId }) {
@@ -543,6 +617,88 @@ app.get('/api/has-users', async (req, res) => {
     res.json({ hasUsers: (count || 0) > 0 });
   } catch (e) {
     res.status(200).json({ hasUsers: true });
+  }
+});
+
+/* =========================================================================
+   استعادة كلمة المرور بالمصادقة الثنائية (TOTP + رمز QR) — ثلاث مراحل:
+   1) forgot/start:  التحقق من اسم المستخدم + رقم الهوية الوطنية معًا (وليس
+      اسم المستخدم وحده) هو ما يثبت هوية صاحب الحساب هنا؛ إن تطابقا، يُنشئ
+      الخادم سرًّا جديدًا للمصادقة الثنائية ويُعيد رمز QR لمسحه بتطبيق مصادقة
+      (Google/Microsoft Authenticator) مع تذكرة موقّعة صالحة 5 دقائق تحمل هذا
+      السرّ (السرّ لا يُخزَّن في قاعدة البيانات إطلاقًا — فقط داخل التذكرة
+      الموقّعة على العميل، ولا قيمة له بعد انتهاء صلاحيتها).
+   2) forgot/verify: يتحقق من الرمز المكوَّن من 6 أرقام المُدخل مقابل نفس
+      السرّ، ثم يُصدر تذكرة ثانية محدودة الغرض (password_reset) صالحة أيضًا
+      5 دقائق فقط.
+   3) forgot/reset:  يستخدم تذكرة password_reset لتعيين كلمة مرور جديدة
+      مباشرة عبر hash_password، دون الحاجة لمعرفة كلمة المرور القديمة.
+   كل مرحلة مقيّدة بمعدّل محاولات لكل IP، وردود الخطأ عامة الصياغة لتفادي
+   تسريب أي معلومة عن وجود اسم مستخدم أو رقم هوية معيّن من عدمه.
+   ========================================================================= */
+const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر التحقق من البيانات المدخلة. تأكد من اسم المستخدم ورقم الهوية الوطنية.' } };
+
+app.post('/api/2fa/forgot/start', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
+  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
+  const { username, nationalId } = req.body || {};
+  if (!username || !nationalId) return res.status(400).json(GENERIC_FORGOT_ERROR);
+  try {
+    const { data, error } = await supabase.from('users_public').select('*').eq('user_name', String(username).trim()).maybeSingle();
+    if (error || !data) return res.status(400).json(GENERIC_FORGOT_ERROR);
+    if (data.user_status !== 'مفتوح') return res.status(400).json(GENERIC_FORGOT_ERROR);
+    if (NO_LOGIN_USER_TYPES.has(data.user_type)) return res.status(400).json(GENERIC_FORGOT_ERROR);
+    if (!data.national_id || String(data.national_id).trim() !== String(nationalId).trim()) return res.status(400).json(GENERIC_FORGOT_ERROR);
+
+    const secret = new OTPAuth.Secret({ size: 20 });
+    const totp = new OTPAuth.TOTP({ issuer: 'نظام إدارة الاتحادات', label: data.user_name, algorithm: 'SHA1', digits: 6, period: 30, secret });
+    const qr = await QRCode.toDataURL(totp.toString(), { margin: 1, width: 240 });
+    const ticket = signPurposeToken('2fa_setup', { uid: data.user_id, secret: secret.base32 }, 5 * 60 * 1000);
+    return res.json({ data: { qr, ticket, manualKey: secret.base32 }, error: null });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json(GENERIC_FORGOT_ERROR);
+  }
+});
+
+app.post('/api/2fa/forgot/verify', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  if (!checkForgotRateLimit(ip)) return res.status(429).json({ data: null, error: { message: 'محاولات كثيرة جدًا. الرجاء المحاولة لاحقًا.' } });
+  const { ticket, code } = req.body || {};
+  const claims = verifyPurposeToken(ticket, '2fa_setup');
+  if (!claims) return res.status(400).json({ data: null, error: { message: 'انتهت صلاحية الجلسة، الرجاء البدء من جديد.' } });
+  try {
+    const totp = new OTPAuth.TOTP({ algorithm: 'SHA1', digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(claims.secret) });
+    const delta = totp.validate({ token: String(code || '').trim(), window: 1 });
+    if (delta === null) return res.status(400).json({ data: null, error: { message: 'الرمز غير صحيح.' } });
+    const resetTicket = signPurposeToken('password_reset', { uid: claims.uid }, 5 * 60 * 1000);
+    return res.json({ data: { resetTicket }, error: null });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ data: null, error: { message: 'خطأ غير متوقع في الخادم' } });
+  }
+});
+
+app.post('/api/2fa/forgot/reset', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
+  const { resetTicket, newPassword } = req.body || {};
+  const claims = verifyPurposeToken(resetTicket, 'password_reset');
+  if (!claims) return res.status(400).json({ data: null, error: { message: 'انتهت صلاحية الجلسة، الرجاء البدء من جديد.' } });
+  if (!newPassword || String(newPassword).length < 8) return res.status(400).json({ data: null, error: { message: 'كلمة المرور يجب ألا تقل عن 8 أحرف.' } });
+  try {
+    const { data: hashed, error: hashErr } = await supabase.rpc('hash_password', { p: newPassword });
+    if (hashErr) return res.status(500).json({ data: null, error: { message: 'تعذّر تجهيز كلمة المرور.' } });
+    const { error } = await supabase.from('users').update({ password: hashed }).eq('user_id', claims.uid);
+    if (error) return res.status(500).json({ data: null, error: { message: error.message } });
+    await logAudit({ user: { user_id: claims.uid, employee_name_ar: null, federation_id: null }, action: 'forgotPasswordReset', success: true, targetTable: 'users', targetId: claims.uid, message: 'إعادة تعيين كلمة المرور عبر التحقق الثنائي (نسيت كلمة المرور)', ip });
+    return res.json({ data: { ok: true }, error: null });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ data: null, error: { message: 'خطأ غير متوقع في الخادم' } });
   }
 });
 
@@ -631,6 +787,11 @@ app.post('/api/db', async (req, res) => {
     } else if (op === 'update') {
       if (!TABLE_FIELDS[table]) return res.status(400).json({ data: null, error: { message: 'جدول غير مسموح: ' + table } });
       if (NO_WRITE_TABLES.has(table)) return res.status(403).json({ data: null, error: { message: 'غير مسموح بالكتابة في هذا الجدول.' } });
+      if (table === 'delegations') {
+        // لا يوجد تعديل عام لسجل مشارك بعد إضافته — كل التغييرات المسموحة
+        // (اعتماد/رفض/إدخال بيانات التذكرة) تمر حصرًا عبر /api/action.
+        return res.status(403).json({ data: null, error: { message: 'لا يمكن تعديل بيانات المشارك مباشرة — استخدم إجراءات الاعتماد/الرفض أو إدخال بيانات التذكرة.' } });
+      }
       if (!pkField || !id) return res.status(400).json({ data: null, error: { message: 'معرّف السجل مطلوب للتحديث.' } });
 
       let cleanPatch = filterFields(patch, TABLE_FIELDS[table]);

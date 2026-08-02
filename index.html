@@ -101,7 +101,7 @@ function fmtDate(d){
   try{
     const dt = (d instanceof Date) ? d : new Date(d);
     if(isNaN(dt.getTime())) return String(d);
-    return dt.toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric'});
+    return dt.toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric',numberingSystem:'latn'});
   }catch(e){ return String(d); }
 }
 function fmtDateTime(d){
@@ -109,12 +109,12 @@ function fmtDateTime(d){
   try{
     const dt = (d instanceof Date) ? d : new Date(d);
     if(isNaN(dt.getTime())) return String(d);
-    return dt.toLocaleString('ar-SA',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    return dt.toLocaleString('ar-SA',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',numberingSystem:'latn'});
   }catch(e){ return String(d); }
 }
 function money(n){
   n = Number(n||0);
-  return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ر.س';
+  return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2,numberingSystem:'latn'}) + ' ر.س';
 }
 function esc(s){
   if(s===null||s===undefined) return '';

@@ -290,6 +290,7 @@ create table if not exists delegations (
   ticket_price                   numeric default 0,
   total_amount                   numeric default 0,
   file                           text,
+  ticket_submitted               boolean not null default false,
   created_by                     text,
   created_at                     timestamptz default now(),
   request_approved_by            text references users(user_id),

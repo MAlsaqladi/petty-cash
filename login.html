@@ -88,11 +88,68 @@
       </div>
       <button class="btn btn-primary btn-block" id="loginBtn" onclick="doLogin()">تسجيل الدخول</button>
       <div id="loginAlert"></div>
+      <div class="mt-16" style="text-align:center;"><span class="back-link" onclick="Forgot.open()">نسيت كلمة المرور؟</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SCREEN 4: FORGOT PASSWORD (TOTP / QR) ============ -->
+<div id="screen-forgot" class="stage hidden">
+  <div class="stage-card">
+    <div class="brandmark"><img src="logo.png" alt="الشعار" style="width:100%;height:100%;object-fit:contain;border-radius:10px;"></div>
+    <span class="back-link" onclick="Forgot.backToLogin()">‹ رجوع لتسجيل الدخول</span>
+    <h1 class="stage-title">نسيت كلمة المرور</h1>
+    <p class="stage-sub" id="forgotSub">تحقّق من هويتك أولاً، ثم أعد تعيين كلمة المرور عبر تطبيق مصادقة ثنائية.</p>
+    <div class="card card-pad">
+      <div id="forgotStep1">
+        <div class="field">
+          <label>اسم المستخدم</label>
+          <input type="text" id="fgUser" placeholder="اسم المستخدم" autocomplete="username">
+        </div>
+        <div class="field">
+          <label>رقم الهوية الوطنية</label>
+          <input type="text" id="fgNationalId" placeholder="رقم الهوية الوطنية" inputmode="numeric">
+        </div>
+        <button class="btn btn-primary btn-block" id="fgStartBtn" onclick="Forgot.start()">متابعة</button>
+        <div id="fgAlert1"></div>
+      </div>
+
+      <div id="forgotStep2" class="hidden">
+        <div class="alert alert-info">امسح رمز الاستجابة السريعة (QR) بتطبيق مصادقة ثنائية (مثل Google Authenticator أو Microsoft Authenticator)، ثم أدخل الرمز المكوّن من 6 أرقام الظاهر في التطبيق.</div>
+        <div style="text-align:center;margin:14px 0;"><img id="fgQrImg" src="" alt="رمز QR" style="width:200px;height:200px;border-radius:10px;border:1.5px solid var(--line);"></div>
+        <div class="small muted" style="text-align:center;margin-bottom:10px;">لا يمكن مسح الرمز؟ أدخله يدويًا في التطبيق: <code id="fgManualKey"></code></div>
+        <div class="field">
+          <label>الرمز المكوّن من 6 أرقام</label>
+          <input type="text" id="fgCode" placeholder="000000" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+        </div>
+        <button class="btn btn-primary btn-block" id="fgVerifyBtn" onclick="Forgot.verify()">تحقّق</button>
+        <div id="fgAlert2"></div>
+      </div>
+
+      <div id="forgotStep3" class="hidden">
+        <div class="alert alert-info">تم التحقق من هويتك بنجاح — أدخل كلمة المرور الجديدة.</div>
+        <div class="field">
+          <label>كلمة المرور الجديدة</label>
+          <input type="password" id="fgNewPass" placeholder="8 أحرف على الأقل" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label>تأكيد كلمة المرور الجديدة</label>
+          <input type="password" id="fgNewPass2" placeholder="أعد كتابة كلمة المرور" autocomplete="new-password">
+        </div>
+        <button class="btn btn-primary btn-block" id="fgResetBtn" onclick="Forgot.reset()">تعيين كلمة المرور</button>
+        <div id="fgAlert3"></div>
+      </div>
+
+      <div id="forgotStep4" class="hidden">
+        <div class="alert alert-success">تم تغيير كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.</div>
+        <button class="btn btn-primary btn-block" onclick="Forgot.backToLogin()">الذهاب لتسجيل الدخول</button>
+      </div>
     </div>
   </div>
 </div>
 
 <div id="toastRoot"></div>
+
 
 <script>
 /* أنواع مستخدمين ممنوعة من تسجيل الدخول إلى أي نظام (لاعب/حكم/متعاون) —
@@ -114,7 +171,7 @@ async function apiCall(body){
 }
 
 function showScreen(id){
-  ['screen-boot','screen-choose','screen-login'].forEach(s=>{
+  ['screen-boot','screen-choose','screen-login','screen-forgot'].forEach(s=>{
     document.getElementById(s).classList.toggle('hidden', s!==id);
   });
 }
@@ -174,6 +231,98 @@ function esc(s){
   if(s===null||s===undefined) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+/* ============================= نسيت كلمة المرور (مصادقة ثنائية عبر QR) ============================= */
+const Forgot = (function(){
+  let ticket = null;       // تذكرة المرحلة 1 → 2 (صالحة 5 دقائق)
+  let resetTicket = null;  // تذكرة المرحلة 2 → 3 (صالحة 5 دقائق)
+
+  function showStep(n){
+    [1,2,3,4].forEach(i=>{
+      const el = document.getElementById('forgotStep'+i);
+      if(el) el.classList.toggle('hidden', i!==n);
+    });
+  }
+  function alertBox(elId, msg, kind){
+    const el = document.getElementById(elId);
+    if(el) el.innerHTML = msg ? `<div class="alert alert-${kind||'danger'}">${esc(msg)}</div>` : '';
+  }
+
+  function open(){
+    ticket = null; resetTicket = null;
+    document.getElementById('fgUser').value = '';
+    document.getElementById('fgNationalId').value = '';
+    document.getElementById('fgCode').value = '';
+    document.getElementById('fgNewPass').value = '';
+    document.getElementById('fgNewPass2').value = '';
+    alertBox('fgAlert1',''); alertBox('fgAlert2',''); alertBox('fgAlert3','');
+    showStep(1);
+    showScreen('screen-forgot');
+  }
+  function backToLogin(){
+    showScreen('screen-login');
+  }
+
+  async function postJSON(url, body){
+    let res;
+    try{ res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+    catch(e){ return { data:null, error:{ message:'تعذّر الاتصال بالخادم.' } }; }
+    try{ return await res.json(); }
+    catch(e){ return { data:null, error:{ message:'استجابة غير متوقعة من الخادم (رمز الحالة: '+res.status+')' } }; }
+  }
+
+  async function start(){
+    const username = document.getElementById('fgUser').value.trim();
+    const nationalId = document.getElementById('fgNationalId').value.trim();
+    alertBox('fgAlert1','');
+    if(!username || !nationalId){ alertBox('fgAlert1','الرجاء إدخال اسم المستخدم ورقم الهوية الوطنية.'); return; }
+    const btn = document.getElementById('fgStartBtn');
+    btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
+    const { data, error } = await postJSON('/api/2fa/forgot/start', { username, nationalId });
+    btn.disabled = false; btn.textContent = 'متابعة';
+    if(error || !data){ alertBox('fgAlert1', (error&&error.message)||'تعذّر التحقق من البيانات.'); return; }
+    ticket = data.ticket;
+    document.getElementById('fgQrImg').src = data.qr;
+    document.getElementById('fgManualKey').textContent = data.manualKey;
+    document.getElementById('fgCode').value = '';
+    alertBox('fgAlert2','');
+    showStep(2);
+  }
+
+  async function verify(){
+    const code = document.getElementById('fgCode').value.trim();
+    alertBox('fgAlert2','');
+    if(!ticket){ alertBox('fgAlert2','انتهت صلاحية الجلسة، الرجاء البدء من جديد.'); showStep(1); return; }
+    if(!code || code.length < 6){ alertBox('fgAlert2','أدخل الرمز المكوّن من 6 أرقام.'); return; }
+    const btn = document.getElementById('fgVerifyBtn');
+    btn.disabled = true; btn.textContent = 'جارٍ التحقق…';
+    const { data, error } = await postJSON('/api/2fa/forgot/verify', { ticket, code });
+    btn.disabled = false; btn.textContent = 'تحقّق';
+    if(error || !data){ alertBox('fgAlert2', (error&&error.message)||'الرمز غير صحيح.'); return; }
+    resetTicket = data.resetTicket;
+    document.getElementById('fgNewPass').value = '';
+    document.getElementById('fgNewPass2').value = '';
+    alertBox('fgAlert3','');
+    showStep(3);
+  }
+
+  async function reset(){
+    const p1 = document.getElementById('fgNewPass').value;
+    const p2 = document.getElementById('fgNewPass2').value;
+    alertBox('fgAlert3','');
+    if(!resetTicket){ alertBox('fgAlert3','انتهت صلاحية الجلسة، الرجاء البدء من جديد.'); showStep(1); return; }
+    if(!p1 || p1.length < 8){ alertBox('fgAlert3','كلمة المرور يجب ألا تقل عن 8 أحرف.'); return; }
+    if(p1 !== p2){ alertBox('fgAlert3','كلمتا المرور غير متطابقتين.'); return; }
+    const btn = document.getElementById('fgResetBtn');
+    btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
+    const { data, error } = await postJSON('/api/2fa/forgot/reset', { resetTicket, newPassword: p1 });
+    btn.disabled = false; btn.textContent = 'تعيين كلمة المرور';
+    if(error || !data){ alertBox('fgAlert3', (error&&error.message)||'تعذّر تعيين كلمة المرور.'); return; }
+    showStep(4);
+  }
+
+  return { open, backToLogin, start, verify, reset };
+})();
 
 async function boot(){
   // إن كانت هناك جلسة محفوظة مسبقًا، لا حاجة لإعادة تسجيل الدخول
