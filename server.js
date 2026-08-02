@@ -52,22 +52,23 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
   : null;
 
 /* =========================================================================
-   إرسال البريد (لميزة "نسيت كلمة المرور") — ثلاث طرق، اختر واحدة فقط:
+   إرسال البريد (لميزة "نسيت كلمة المرور") — أربع طرق، اختر واحدة فقط:
 
-   1) RESEND_API_KEY — بديل بسيط جدًا وموثوق، يرسل عبر HTTPS (لا يتأثر بحجب
-      منافذ SMTP). يحتاج توثيق نطاق (domain) في Resend لإرسال فعلي لأي بريد،
-      أو يمكن تجربته مباشرة عبر onboarding@resend.dev لبريدك أنت فقط أثناء
-      الاختبار قبل توثيق النطاق.
-   2) BREVO_API_KEY — أيضًا يرسل عبر HTTPS. يحتاج توثيق بريد "مُرسل" واحد
-      فقط في Brevo (أسهل من توثيق نطاق كامل).
-   3) SMTP_HOST/SMTP_USER/SMTP_PASS — تعمل فقط لو كانت منافذ SMTP الصادرة
+   1) RESEND_API_KEY — يحتاج توثيق نطاق (domain) لإرسال فعلي لأي بريد، أو
+      يمكن تجربته مباشرة عبر onboarding@resend.dev لبريدك أنت فقط للاختبار.
+   2) BREVO_API_KEY — يحتاج توثيق بريد "مُرسل" واحد فقط (أسهل من نطاق كامل).
+   3) SENDGRID_API_KEY — نفس مبدأ Brevo تقريبًا (توثيق بريد مُرسل واحد)،
+      لكن مزوّد مختلف — بديل جاهز إن تعذّر الوصول لأحد المزوّدين الآخرين.
+   4) SMTP_HOST/SMTP_USER/SMTP_PASS — تعمل فقط لو كانت منافذ SMTP الصادرة
       (587/465) غير محجوبة على مضيفك. Render يحجبها افتراضيًا غالبًا، لذا
-      الطريقتان أعلاه أضمن بكثير عليه.
-   الأولوية عند توفر أكثر من طريقة: Resend، ثم Brevo، ثم SMTP.
+      الطرق الثلاث أعلاه أضمن بكثير عليه.
+   الأولوية عند توفر أكثر من طريقة معًا: Resend، ثم Brevo، ثم SendGrid، ثم SMTP.
    ========================================================================= */
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const RESEND_FROM = process.env.RESEND_FROM || '';
 const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
+const SENDGRID_FROM = process.env.SENDGRID_FROM || process.env.SMTP_FROM || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
@@ -87,12 +88,12 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     socketTimeout: 8000,
   });
 }
-const MAIL_CONFIGURED = !!(RESEND_API_KEY || BREVO_API_KEY || mailTransporter);
+const MAIL_CONFIGURED = !!(RESEND_API_KEY || BREVO_API_KEY || SENDGRID_API_KEY || mailTransporter);
 if (!MAIL_CONFIGURED) {
-  console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا RESEND_API_KEY ولا BREVO_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
+  console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا RESEND_API_KEY ولا BREVO_API_KEY ولا SENDGRID_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
 }
 
-/* دالة إرسال موحّدة — تجرّب Resend HTTP API أولاً إن وُجد مفتاحه، ثم Brevo، وإلا SMTP */
+/* دالة إرسال موحّدة — تجرّب Resend ثم Brevo ثم SendGrid (HTTP API)، وإلا SMTP */
 async function sendMailUnified({ to, subject, text, html }) {
   if (RESEND_API_KEY) {
     const fromEmail = RESEND_FROM || 'onboarding@resend.dev';
@@ -133,6 +134,31 @@ async function sendMailUnified({ to, subject, text, html }) {
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         throw new Error(`فشل إرسال البريد عبر Brevo (${res.status}): ${errText.slice(0, 200)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return;
+  }
+  if (SENDGRID_API_KEY) {
+    if (!SENDGRID_FROM) throw new Error('أضف SENDGRID_FROM (بريد المُرسل الموثّق في SendGrid) في متغيرات البيئة.');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SENDGRID_API_KEY}` },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: SENDGRID_FROM },
+          subject,
+          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }],
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`فشل إرسال البريد عبر SendGrid (${res.status}): ${errText.slice(0, 200)}`);
       }
     } finally {
       clearTimeout(timer);
@@ -759,7 +785,7 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
       msg = 'تعذّر إرسال البريد: بيانات تسجيل الدخول (SMTP_USER أو SMTP_PASS) غير صحيحة. تأكد من أن SMTP_PASS هي كلمة مرور التطبيق (App Password) الصحيحة وأنها لم تُلغَ.';
     } else if (e && (e.code === 'ECONNECTION' || e.code === 'ETIMEDOUT' || e.code === 'ESOCKET')) {
       msg = 'تعذّر إرسال البريد: تعذّر الاتصال بخادم البريد. تأكد من صحة SMTP_HOST وSMTP_PORT.';
-    } else if (e && e.message && (e.message.includes('Resend') || e.message.includes('Brevo'))) {
+    } else if (e && e.message && (e.message.includes('Resend') || e.message.includes('Brevo') || e.message.includes('SendGrid'))) {
       // رسائل Resend/Brevo تحمل تفاصيل مفيدة أصلاً (رمز الحالة ونص الخطأ من مزوّد البريد نفسه)
       msg = 'تعذّر إرسال البريد: ' + e.message;
     }

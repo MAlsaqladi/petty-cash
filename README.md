@@ -104,7 +104,19 @@ git push -u origin main
 | `BREVO_API_KEY` | مفتاح الـ API الذي ولّدته |
 | `SMTP_FROM` | البريد الإلكتروني الذي وثّقته كمُرسل في Brevo |
 
-**الخيار 3 (بديل، غالبًا لا يعمل على Render) — SMTP تقليدي:**
+**الخيار 3 — SendGrid (بديل إن تعذّر الوصول لـ Resend أو Brevo):**
+
+1. أنشئ حساب مجاني على [sendgrid.com](https://sendgrid.com) (حتى 100 إيميل/يوم مجانًا).
+2. من **Settings → Sender Authentication → Single Sender Verification**، أضف ووثّق بريدك الإلكتروني كمُرسل (نفس مبدأ Brevo، بريد واحد فقط).
+3. من **Settings → API Keys**، أنشئ مفتاحًا جديدًا (صلاحية Full Access أو Mail Send على الأقل).
+4. أضف في Render → Environment:
+
+| Name | Value |
+|---|---|
+| `SENDGRID_API_KEY` | مفتاح الـ API الذي أنشأته |
+| `SENDGRID_FROM` | البريد الإلكتروني الذي وثّقته كمُرسل في SendGrid |
+
+**الخيار 4 (بديل، غالبًا لا يعمل على Render) — SMTP تقليدي:**
 
 | Name | Value |
 |---|---|
@@ -115,7 +127,7 @@ git push -u origin main
 | `SMTP_FROM` | (اختياري) عنوان "المرسل" الظاهر — إن لم تضِفه يُستخدم `SMTP_USER` |
 | `SMTP_SECURE` | (اختياري) اكتب `true` فقط إذا كان المنفذ `465` |
 
-ترتيب الأولوية عند توفر أكثر من طريقة معًا: `RESEND_API_KEY` أولاً، ثم `BREVO_API_KEY`، ثم SMTP. بدون أي منها، زر "نسيت كلمة المرور" سيظهر خطأً واضحًا للمستخدم بدل التوقف بصمت — والميزة تتطلب أن يكون لكل مستخدم بريد إلكتروني صحيح مسجَّل في حسابه (عمود `email`).
+ترتيب الأولوية عند توفر أكثر من طريقة معًا: `RESEND_API_KEY` أولاً، ثم `BREVO_API_KEY`، ثم `SENDGRID_API_KEY`، ثم SMTP. بدون أي منها، زر "نسيت كلمة المرور" سيظهر خطأً واضحًا للمستخدم بدل التوقف بصمت — والميزة تتطلب أن يكون لكل مستخدم بريد إلكتروني صحيح مسجَّل في حسابه (عمود `email`).
 
 4. **Create Web Service**. بعد انتهاء البناء يصبح التطبيق متاحًا على رابط مثل:
    `https://petty-cash.onrender.com`
