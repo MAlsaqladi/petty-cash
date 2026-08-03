@@ -408,6 +408,38 @@ function applyScope(query, table, scope) {
   return query;
 }
 
+/* =========================================================================
+   إنشاء كلمة مرور أولية قوية وإرسالها للمستخدم الجديد على بريده.
+   الفلسفة: لا أحد — ولا حتى من أضاف الحساب — يرى كلمة المرور. تُولَّد على
+   الخادم، تُشفَّر قبل الحفظ، وتُرسل لصاحبها فقط، ثم يغيّرها من حسابه.
+   ========================================================================= */
+const PWD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function generatePassword(len = 12) {
+  let out = '';
+  for (let i = 0; i < len; i++) out += PWD_ALPHABET[crypto.randomInt(0, PWD_ALPHABET.length)];
+  // نضمن وجود رمز خاص ورقم وحرف كبير حتى تجتاز أي سياسة تعقيد
+  return out.slice(0, len - 3) + '@' + crypto.randomInt(0, 10) + 'A';
+}
+
+async function sendWelcomeMail({ to, name, username, password, federationName }) {
+  const subject = 'بيانات الدخول إلى نظام إدارة العهد والانتدابات';
+  const text = `مرحبًا ${name || ''}\n\nتم إنشاء حساب لك${federationName ? ' في ' + federationName : ''}.\n\n`
+    + `اسم المستخدم: ${username}\nكلمة المرور المؤقتة: ${password}\n\n`
+    + `الحساب بحالة "تحت المعالجة" حتى يعتمده رئيس الاتحاد أو المدير التنفيذي.\n`
+    + `للأمان: غيّر كلمة المرور من صفحة "حسابي" بعد أول دخول، ولا تشاركها مع أحد.`;
+  const html = `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.9;">
+    <p>مرحبًا ${name || ''}،</p>
+    <p>تم إنشاء حساب لك${federationName ? ' في <b>' + federationName + '</b>' : ''} على نظام إدارة العهد النقدية والانتدابات.</p>
+    <table style="border-collapse:collapse;margin:14px 0;">
+      <tr><td style="padding:6px 12px;background:#f3f5f2;">اسم المستخدم</td><td style="padding:6px 12px;font-weight:bold;">${username}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f3f5f2;">كلمة المرور المؤقتة</td><td style="padding:6px 12px;font-weight:bold;letter-spacing:2px;">${password}</td></tr>
+    </table>
+    <p>الحساب بحالة <b>تحت المعالجة</b> حتى يعتمده رئيس الاتحاد أو المدير التنفيذي.</p>
+    <p style="color:#a33;">للأمان: غيّر كلمة المرور من صفحة "حسابي" بعد أول دخول، ولا تشاركها مع أحد.</p>
+  </div>`;
+  return sendMailUnified({ to, subject, text, html });
+}
+
 function filterFields(obj, allowed) {
   if (!obj || typeof obj !== 'object') return {};
   const out = {};
@@ -872,6 +904,55 @@ const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر الت�
 const MAIL_ADMIN_TYPES = new Set(['مراجع', 'رئيس الاتحاد', 'مدير تنفيذي', 'محاسب']);
 const mask = (v) => !v ? null : (String(v).slice(0, 4) + '…' + String(v).slice(-3) + ` (${String(v).length} حرفًا)`);
 
+/* إعادة توليد كلمة مرور مؤقتة لمستخدم وإرسالها لبريده — لمن يملك صلاحية
+   إدارة المستخدمين فقط، وداخل اتحاده فقط. لا تُعرض كلمة المرور للمشرف. */
+app.post('/api/user-credentials/resend', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
+  const admin = await authenticateRequest(req);
+  if (!admin) return res.status(401).json({ data: null, error: { message: 'انتهت الجلسة.', code: 'AUTH_REQUIRED' } });
+  if (CANNOT_MANAGE_USERS_TYPES.has(admin.user_type)) {
+    return res.status(403).json({ data: null, error: { message: 'لا تملك صلاحية إدارة المستخدمين.' } });
+  }
+  if (!MAIL_CONFIGURED) return res.status(400).json({ data: null, error: { message: 'إعدادات البريد غير مفعّلة على الخادم.' } });
+  const targetId = String((req.body || {}).userId || '');
+  if (!targetId) return res.status(400).json({ data: null, error: { message: 'معرّف المستخدم مطلوب.' } });
+  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  try {
+    const { data: target, error } = await supabase.from('users_public').select('*').eq('user_id', targetId).maybeSingle();
+    if (error || !target) return res.status(404).json({ data: null, error: { message: 'المستخدم غير موجود.' } });
+    const isAud = admin.user_type === 'مراجع';
+    if (!isAud && target.federation_id !== admin.federation_id) {
+      return res.status(403).json({ data: null, error: { message: 'هذا المستخدم لا يتبع اتحادك.' } });
+    }
+    if (!target.email) return res.status(400).json({ data: null, error: { message: 'لا يوجد بريد إلكتروني مسجَّل على هذا الحساب.' } });
+
+    const password = generatePassword(12);
+    const { data: hashed, error: hashErr } = await supabase.rpc('hash_password', { p: password });
+    if (hashErr) return res.status(500).json({ data: null, error: { message: 'تعذّر تجهيز كلمة المرور.' } });
+
+    let fedName = null;
+    try {
+      const f = await supabase.from('federations').select('federation_name_ar').eq('federation_id', target.federation_id).maybeSingle();
+      fedName = f && f.data ? f.data.federation_name_ar : null;
+    } catch (e) { /* تحسين فقط */ }
+
+    // نرسل أولاً ثم نحفظ — حتى لا تتغيّر كلمة المرور إن فشل البريد
+    const r = await sendWelcomeMail({
+      to: target.email, name: target.employee_name_ar || target.employee_name_en || '',
+      username: target.user_name, password, federationName: fedName,
+    });
+    const { error: upErr } = await supabase.from('users').update({ password: hashed }).eq('user_id', targetId);
+    if (upErr) return res.status(500).json({ data: null, error: { message: 'تعذّر حفظ كلمة المرور الجديدة.' } });
+
+    await logAudit({ user: admin, action: 'resendCredentials', success: true, targetTable: 'users', targetId, message: 'إعادة توليد كلمة مرور مؤقتة وإرسالها بالبريد', ip });
+    return res.json({ data: { sent: true, to: maskEmail(target.email), provider: r.provider }, error: null });
+  } catch (e) {
+    await logAudit({ user: admin, action: 'resendCredentials', success: false, targetTable: 'users', targetId, message: (e && e.message) || '', ip });
+    return res.status(500).json({ data: null, error: { message: (e && e.mailProblems ? e.mailProblems.join(' — ') : (e && e.message) || 'تعذّر الإرسال.') } });
+  }
+});
+
 app.get('/api/mail-status', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const u = await authenticateRequest(req);
@@ -1041,6 +1122,9 @@ app.post('/api/db', async (req, res) => {
 
   try {
     let query;
+    // تُملأ عند إضافة مستخدم جديد بكلمة مرور مولّدة، لإرسالها بالبريد بعد نجاح الحفظ
+    let generatedPassword = null;
+    let newUserInfo = null;
 
     if (op === 'select') {
       if (table === 'users') {
@@ -1070,13 +1154,28 @@ app.post('/api/db', async (req, res) => {
         if (CANNOT_MANAGE_USERS_TYPES.has(currentUser.user_type)) {
           return res.status(403).json({ data: null, error: { message: 'لا تملك صلاحية إضافة مستخدمين.' } });
         }
+        // كلمة المرور لم تعد تُكتب يدويًا: إن لم تُرسل، يولّدها الخادم ويرسلها
+        // لصاحب الحساب على بريده — فلا تمر أبدًا عبر متصفح من أضاف الحساب.
         if (!cleanPayload.password) {
-          return res.status(400).json({ data: null, error: { message: 'كلمة المرور مطلوبة.' } });
+          if (!MAIL_CONFIGURED) {
+            return res.status(400).json({ data: null, error: { message: 'إعدادات البريد غير مفعّلة على الخادم، فلا يمكن إرسال كلمة المرور للمستخدم. تواصل مع الدعم الفني.' } });
+          }
+          if (!cleanPayload.email) {
+            return res.status(400).json({ data: null, error: { message: 'البريد الإلكتروني إلزامي — إليه تُرسل بيانات الدخول.' } });
+          }
+          generatedPassword = generatePassword(12);
+          cleanPayload.password = generatedPassword;
         }
         const { data: hashed, error: hashErr } = await supabase.rpc('hash_password', { p: cleanPayload.password });
         if (hashErr) return res.status(500).json({ data: null, error: { message: 'تعذّر تجهيز كلمة المرور.' } });
         cleanPayload.password = hashed;
         if (!isAuditor) cleanPayload.federation_id = currentUser.federation_id;
+        newUserInfo = {
+          email: cleanPayload.email,
+          name: cleanPayload.employee_name_ar || cleanPayload.employee_name_en || '',
+          username: cleanPayload.user_name,
+          federation_id: cleanPayload.federation_id,
+        };
       } else if (table === 'expense_types') {
         if (!isAuditor) return res.status(403).json({ data: null, error: { message: 'لا تملك صلاحية إضافة نوع مصروف.' } });
       } else {
@@ -1138,6 +1237,30 @@ app.post('/api/db', async (req, res) => {
     if (table === 'users' && data) {
       if (Array.isArray(data)) data.forEach(r => { if (r) delete r.password; });
       else delete data.password;
+    }
+
+    // إرسال بيانات الدخول للمستخدم الجديد — بعد نجاح الحفظ فقط
+    if (generatedPassword && newUserInfo) {
+      let fedName = null;
+      try {
+        const f = await supabase.from('federations').select('federation_name_ar').eq('federation_id', newUserInfo.federation_id).maybeSingle();
+        fedName = f && f.data ? f.data.federation_name_ar : null;
+      } catch (e) { /* اسم الاتحاد تحسين فقط، لا يمنع الإرسال */ }
+      try {
+        const r = await sendWelcomeMail({
+          to: newUserInfo.email, name: newUserInfo.name,
+          username: newUserInfo.username, password: generatedPassword, federationName: fedName,
+        });
+        return res.json({ data, mail: { sent: true, to: maskEmail(newUserInfo.email), provider: r.provider }, error: null });
+      } catch (e) {
+        // الحساب أُنشئ فعلاً لكن البريد فشل — نخبر المشرف بوضوح ليعيد الإرسال
+        console.error('تعذّر إرسال بيانات الدخول للمستخدم الجديد:', e && e.message);
+        return res.json({
+          data,
+          mail: { sent: false, to: maskEmail(newUserInfo.email), reason: (e && e.mailProblems ? e.mailProblems.join(' — ') : (e && e.message) || 'سبب غير معروف') },
+          error: null,
+        });
+      }
     }
     res.json({ data, error: null });
   } catch (e) {
