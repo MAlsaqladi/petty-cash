@@ -293,6 +293,62 @@ const NO_LOGIN_USER_TYPES = new Set(['لاعب', 'حكم', 'متعاون']);
 // أنواع لا يحق لها إدارة المستخدمين (إضافة حسابات جديدة) — يطابق Perm.canManageUsers في الواجهة
 const CANNOT_MANAGE_USERS_TYPES = new Set(['موظف', 'موارد بشرية', 'عضو مجلس الادارة']);
 
+
+/* =========================================================================
+   تقييد نطاق القراءة: فترة زمنية، أو قائمة معرّفات أب، أو حالات محددة.
+   الهدف: ألا تُحمّل الواجهة كل صفوف الجدول عند فتح البرنامج (قد تصل لملايين
+   الصفوف)، بل الفترة المختارة فقط.
+   ========================================================================= */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/;
+function isValidField(table, field) {
+  const fields = TABLE_FIELDS[table] || (table === 'users_public' ? TABLE_FIELDS.users : []) || [];
+  return typeof field === 'string' && fields.includes(field);
+}
+function applyScope(query, table, scope) {
+  const { dateField, dateFallbackField, dateFrom, dateTo, inField, inValues, statusField, statusValues } = scope;
+
+  // 1) الفترة الزمنية
+  if (dateField && isValidField(table, dateField) && (dateFrom || dateTo)) {
+    const from = (dateFrom && ISO_DATE_RE.test(dateFrom)) ? dateFrom : null;
+    // نهاية الفترة تشمل اليوم المحدد كاملاً: نستخدم "أصغر من اليوم التالي"
+    // ليعمل الأمر بشكل صحيح مع أعمدة التاريخ وأعمدة الوقت (timestamp) معًا.
+    let to = null;
+    if (dateTo && ISO_DATE_RE.test(dateTo)) {
+      const d = new Date(dateTo.slice(0, 10) + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + 1);
+      to = d.toISOString().slice(0, 10);
+    }
+    const hasFallback = dateFallbackField && isValidField(table, dateFallbackField);
+    if (hasFallback) {
+      // العمود الأساسي داخل الفترة، أو (كان فارغًا وعمود الاحتياط داخل الفترة)
+      const main = [];
+      if (from) main.push(`${dateField}.gte.${from}`);
+      if (to) main.push(`${dateField}.lt.${to}`);
+      const fb = [`${dateField}.is.null`];
+      if (from) fb.push(`${dateFallbackField}.gte.${from}`);
+      if (to) fb.push(`${dateFallbackField}.lt.${to}`);
+      query = query.or(`and(${main.join(',')}),and(${fb.join(',')})`);
+    } else {
+      if (from) query = query.gte(dateField, from);
+      if (to) query = query.lt(dateField, to);
+    }
+  }
+
+  // 2) الأبناء التابعون لسجلات أب محمّلة أصلاً (مثل بنود عهدة أو مشاركي رحلة)
+  if (inField && isValidField(table, inField) && Array.isArray(inValues)) {
+    const vals = inValues.filter(v => typeof v === 'string' || typeof v === 'number').slice(0, 1000);
+    if (vals.length === 0) return query.eq(inField, '__none__'); // لا آباء = لا أبناء
+    query = query.in(inField, vals);
+  }
+
+  // 3) حالات محددة (مثل: العهد المفتوحة فقط، مهما كان تاريخها)
+  if (statusField && isValidField(table, statusField) && Array.isArray(statusValues) && statusValues.length) {
+    query = query.in(statusField, statusValues.filter(v => typeof v === 'string').slice(0, 20));
+  }
+
+  return query;
+}
+
 function filterFields(obj, allowed) {
   if (!obj || typeof obj !== 'object') return {};
   const out = {};
@@ -843,7 +899,7 @@ app.post('/api/db', async (req, res) => {
   if (!supabase) {
     return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد: أضف SUPABASE_URL و SUPABASE_SERVICE_KEY في إعدادات البيئة على Render.' } });
   }
-  const { op, table, payload, pkField, id, patch, returning, fn, args } = req.body || {};
+  const { op, table, payload, pkField, id, patch, returning, fn, args, scope } = req.body || {};
 
   /* -------- تسجيل الدخول: العملية الوحيدة المسموحة بدون رمز جلسة -------- */
   if (op === 'rpc' && fn === 'login') {
@@ -886,6 +942,13 @@ app.post('/api/db', async (req, res) => {
       const fedField = FED_FIELD[table];
       if (fedField && !isAuditor) query = query.eq(fedField, currentUser.federation_id);
       if (table === 'federations' && !isAuditor) query = query.eq('federation_id', currentUser.federation_id);
+      /* -------- تقييد النطاق (فترة زمنية / قائمة معرّفات / حالات) --------
+         يُرسل من الواجهة حتى لا نحمّل كل صفوف الجدول في كل مرة. كل أسماء
+         الأعمدة تُتحقق مقابل حقول الجدول المعروفة، وكل التواريخ تُتحقق
+         بنمط صارم — فلا مجال لحقن أي شيء في الاستعلام. */
+      if (scope && typeof scope === 'object') {
+        query = applyScope(query, table, scope);
+      }
 
     } else if (op === 'insert') {
       if (!TABLE_FIELDS[table]) return res.status(400).json({ data: null, error: { message: 'جدول غير مسموح: ' + table } });
