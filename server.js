@@ -92,85 +92,144 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
 const MAIL_CONFIGURED = !!(RESEND_API_KEY || BREVO_API_KEY || SENDGRID_API_KEY || mailTransporter);
 if (!MAIL_CONFIGURED) {
   console.warn('⚠ تحذير: لا توجد إعدادات بريد (لا RESEND_API_KEY ولا BREVO_API_KEY ولا SENDGRID_API_KEY ولا SMTP). ميزة "نسيت كلمة المرور" لن تعمل حتى تُضاف إحداها في Render → Environment.');
+} else {
+  // تشخيص عند الإقلاع: يطبع المزوّدين المفعّلين وأي خلل واضح في القيم،
+  // فتعرف من سجل Render مباشرة سبب أي فشل قبل أن يجربه المستخدمون.
+  const on = [];
+  if (RESEND_API_KEY) on.push('Resend');
+  if (BREVO_API_KEY) on.push('Brevo');
+  if (SENDGRID_API_KEY) on.push('SendGrid');
+  if (mailTransporter) on.push('SMTP');
+  console.log('✉ مزوّدو البريد المفعّلون بالترتيب:', on.join(' ← '));
+  if (SENDGRID_API_KEY && !SENDGRID_API_KEY.startsWith('SG.')) {
+    console.warn('⚠ SENDGRID_API_KEY لا يبدأ بـ "SG." — الغالب أنه ناقص أو منسوخ خطأً. مفاتيح SendGrid تبدأ دائمًا بـ SG.');
+  }
+  if (SENDGRID_API_KEY && !SENDGRID_FROM) {
+    console.warn('⚠ SENDGRID_API_KEY موجود لكن SENDGRID_FROM غير معرّف — لن يعمل الإرسال عبر SendGrid.');
+  }
+  if (BREVO_API_KEY && !(envTrim(process.env.BREVO_FROM_EMAIL) || envTrim(process.env.SMTP_FROM))) {
+    console.warn('⚠ BREVO_API_KEY موجود لكن BREVO_FROM_EMAIL غير معرّف — لن يعمل الإرسال عبر Brevo.');
+  }
 }
 
-/* دالة إرسال موحّدة — تجرّب Resend ثم Brevo ثم SendGrid (HTTP API)، وإلا SMTP */
-async function sendMailUnified({ to, subject, text, html }) {
-  if (RESEND_API_KEY) {
-    const fromEmail = RESEND_FROM || 'onboarding@resend.dev';
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${RESEND_API_KEY}` },
-        body: JSON.stringify({ from: fromEmail, to: [to], subject, text, html }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`فشل إرسال البريد عبر Resend (${res.status}): ${errText.slice(0, 200)}`);
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-    return;
+/* =========================================================================
+   طبقة إرسال البريد
+   -------------------------------------------------------------------------
+   مهم: النسخة السابقة كانت تتوقف عند أول مزوّد "مُعرَّف" فقط — فلو كان مفتاحه
+   خاطئًا أو ملغيًا فشل الإرسال كليًا حتى لو كان هناك مزوّد آخر سليم مضبوط.
+   الآن نجرّب كل المزوّدين المتاحين بالترتيب، وننتقل للتالي عند الفشل، ولا
+   نُرجع خطأ إلا إذا فشلوا جميعًا — مع رسالة تشخيص عربية واضحة تقول بالضبط
+   ما الذي يجب إصلاحه في متغيرات البيئة.
+   ========================================================================= */
+
+/* ترجمة أخطاء مزوّدي البريد الشائعة إلى سبب واضح وحل عملي */
+function explainMailError(provider, status, bodyText) {
+  const t = String(bodyText || '');
+  if (status === 401) {
+    return `${provider}: المفتاح غير صالح أو ملغى (401). أنشئ مفتاح API جديدًا من لوحة ${provider} بصلاحية إرسال البريد (Mail Send / Full Access)، وانسخه كاملاً بدون مسافات أو علامات اقتباس، وضعه في Render → Environment ثم أعد تشغيل الخدمة. ملاحظة: مفتاح ${provider} يُعرض مرة واحدة فقط عند إنشائه.`;
   }
+  if (status === 403) {
+    return `${provider}: المفتاح صالح لكن بريد المُرسل غير موثّق أو المفتاح لا يملك صلاحية الإرسال (403). وثّق بريد المُرسل (Sender Verification) في لوحة ${provider}، وتأكد أن قيمة بريد المُرسل في متغيرات البيئة تطابقه حرفًا بحرف. التفاصيل: ${t.slice(0, 160)}`;
+  }
+  if (status === 400 && /from|sender|domain|verif/i.test(t)) {
+    return `${provider}: بريد المُرسل مرفوض (400) — غالبًا غير موثّق أو مكتوب بصيغة خاطئة. التفاصيل: ${t.slice(0, 160)}`;
+  }
+  if (status === 429) return `${provider}: تجاوزت حد الإرسال المسموح مؤقتًا (429). حاول بعد قليل.`;
+  return `${provider}: فشل الإرسال (${status}). التفاصيل: ${t.slice(0, 180)}`;
+}
+
+async function postJSON(url, headers, body, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 10000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = res.ok ? '' : await res.text().catch(() => '');
+    return { ok: res.ok, status: res.status, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* قائمة المزوّدين المتاحين حسب متغيرات البيئة، بالترتيب المفضّل */
+function mailProviders() {
+  const list = [];
+  if (RESEND_API_KEY) list.push({
+    name: 'Resend',
+    from: RESEND_FROM || 'onboarding@resend.dev',
+    send: async ({ to, subject, text, html }) => postJSON(
+      'https://api.resend.com/emails',
+      { 'Authorization': `Bearer ${RESEND_API_KEY}` },
+      { from: RESEND_FROM || 'onboarding@resend.dev', to: [to], subject, text, html },
+    ),
+  });
   if (BREVO_API_KEY) {
-    const fromEmail = envTrim(process.env.SMTP_FROM) || envTrim(process.env.BREVO_FROM_EMAIL);
-    if (!fromEmail) throw new Error('أضف SMTP_FROM (بريد المُرسل الموثّق في Brevo) في متغيرات البيئة.');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
+    const from = envTrim(process.env.BREVO_FROM_EMAIL) || envTrim(process.env.SMTP_FROM);
+    list.push({
+      name: 'Brevo',
+      from,
+      missing: from ? null : 'أضف BREVO_FROM_EMAIL (بريد المُرسل الموثّق في Brevo) في متغيرات البيئة.',
+      send: async ({ to, subject, text, html }) => postJSON(
+        'https://api.brevo.com/v3/smtp/email',
+        { 'api-key': BREVO_API_KEY },
+        { sender: { email: from }, to: [{ email: to }], subject, textContent: text, htmlContent: html },
+      ),
+    });
+  }
+  if (SENDGRID_API_KEY) list.push({
+    name: 'SendGrid',
+    from: SENDGRID_FROM,
+    missing: SENDGRID_FROM ? null : 'أضف SENDGRID_FROM (بريد المُرسل الموثّق في SendGrid) في متغيرات البيئة.',
+    send: async ({ to, subject, text, html }) => postJSON(
+      'https://api.sendgrid.com/v3/mail/send',
+      { 'Authorization': `Bearer ${SENDGRID_API_KEY}` },
+      {
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: SENDGRID_FROM },
+        subject,
+        content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }],
+      },
+    ),
+  });
+  if (mailTransporter) list.push({
+    name: 'SMTP',
+    from: SMTP_FROM,
+    smtp: true,
+  });
+  return list;
+}
+
+/* إرسال موحّد: يجرّب كل مزوّد متاح بالترتيب، وينجح بأول واحد يعمل */
+async function sendMailUnified({ to, subject, text, html }) {
+  const providers = mailProviders();
+  if (!providers.length) throw new Error('لا توجد إعدادات بريد مفعّلة على الخادم. أضِف RESEND_API_KEY أو BREVO_API_KEY أو SENDGRID_API_KEY في Render → Environment.');
+
+  const problems = [];
+  for (const p of providers) {
+    if (p.missing) { problems.push(p.missing); continue; }
     try {
-      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'api-key': BREVO_API_KEY },
-        body: JSON.stringify({
-          sender: { email: fromEmail },
-          to: [{ email: to }],
-          subject, textContent: text, htmlContent: html,
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`فشل إرسال البريد عبر Brevo (${res.status}): ${errText.slice(0, 200)}`);
+      if (p.smtp) {
+        await mailTransporter.sendMail({ from: SMTP_FROM, to, subject, text, html });
+      } else {
+        const r = await p.send({ to, subject, text, html });
+        if (!r.ok) { problems.push(explainMailError(p.name, r.status, r.text)); continue; }
       }
-    } finally {
-      clearTimeout(timer);
+      if (problems.length) console.warn('تم الإرسال عبر ' + p.name + ' بعد فشل مزوّدين آخرين:', problems.join(' | '));
+      return { provider: p.name };
+    } catch (e) {
+      const msg = (e && e.name === 'AbortError')
+        ? `${p.name}: انتهت المهلة قبل استجابة الخادم.`
+        : `${p.name}: ${(e && e.message) || 'خطأ غير متوقع'}`;
+      problems.push(msg);
     }
-    return;
   }
-  if (SENDGRID_API_KEY) {
-    if (!SENDGRID_FROM) throw new Error('أضف SENDGRID_FROM (بريد المُرسل الموثّق في SendGrid) في متغيرات البيئة.');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
-    try {
-      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SENDGRID_API_KEY}` },
-        body: JSON.stringify({
-          personalizations: [{ to: [{ email: to }] }],
-          from: { email: SENDGRID_FROM },
-          subject,
-          content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }],
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        throw new Error(`فشل إرسال البريد عبر SendGrid (${res.status}): ${errText.slice(0, 200)}`);
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-    return;
-  }
-  if (mailTransporter) {
-    await mailTransporter.sendMail({ from: SMTP_FROM, to, subject, text, html });
-    return;
-  }
-  throw new Error('لا توجد إعدادات بريد مفعّلة على الخادم.');
+  const err = new Error(problems.join(' — '));
+  err.mailProblems = problems;
+  throw err;
 }
 
 function maskEmail(email) {
@@ -804,6 +863,55 @@ app.get('/api/has-users', async (req, res) => {
    ========================================================================= */
 const GENERIC_FORGOT_ERROR = { data: null, error: { message: 'تعذّر التحقق من اسم المستخدم المدخل.' } };
 
+/* -------------------------------------------------------------------------
+   فحص إعدادات البريد وإرسال رسالة تجريبية — للمشرفين فقط.
+   يفيد لمعرفة أي مزوّد مفعّل وأين الخلل بالضبط دون تجربة "نسيت كلمة المرور".
+   GET  /api/mail-status      → حالة الإعدادات (بدون كشف المفاتيح)
+   POST /api/mail-test        → يرسل رسالة تجريبية لبريد المستخدم الحالي
+   ------------------------------------------------------------------------- */
+const MAIL_ADMIN_TYPES = new Set(['مراجع', 'رئيس الاتحاد', 'مدير تنفيذي', 'محاسب']);
+const mask = (v) => !v ? null : (String(v).slice(0, 4) + '…' + String(v).slice(-3) + ` (${String(v).length} حرفًا)`);
+
+app.get('/api/mail-status', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const u = await authenticateRequest(req);
+  if (!u || !MAIL_ADMIN_TYPES.has(u.user_type)) return res.status(403).json({ data: null, error: { message: 'غير مصرّح.' } });
+  const notes = [];
+  if (SENDGRID_API_KEY && !SENDGRID_API_KEY.startsWith('SG.')) notes.push('مفتاح SendGrid لا يبدأ بـ "SG." — غالبًا منسوخ ناقصًا.');
+  if (SENDGRID_API_KEY && !SENDGRID_FROM) notes.push('SENDGRID_FROM غير معرّف.');
+  if (BREVO_API_KEY && !(envTrim(process.env.BREVO_FROM_EMAIL) || envTrim(process.env.SMTP_FROM))) notes.push('BREVO_FROM_EMAIL غير معرّف.');
+  return res.json({
+    data: {
+      providers: mailProviders().map(p => ({ name: p.name, from: p.from || null, missing: p.missing || null })),
+      keys: {
+        RESEND_API_KEY: mask(RESEND_API_KEY), RESEND_FROM: RESEND_FROM || null,
+        BREVO_API_KEY: mask(BREVO_API_KEY), BREVO_FROM_EMAIL: envTrim(process.env.BREVO_FROM_EMAIL) || null,
+        SENDGRID_API_KEY: mask(SENDGRID_API_KEY), SENDGRID_FROM: SENDGRID_FROM || null,
+        SMTP_HOST: SMTP_HOST || null, SMTP_FROM: SMTP_FROM || null,
+      },
+      notes,
+    }, error: null,
+  });
+});
+
+app.post('/api/mail-test', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const u = await authenticateRequest(req);
+  if (!u || !MAIL_ADMIN_TYPES.has(u.user_type)) return res.status(403).json({ data: null, error: { message: 'غير مصرّح.' } });
+  const to = envTrim(u.email) || envTrim((req.body || {}).to);
+  if (!to) return res.status(400).json({ data: null, error: { message: 'لا يوجد بريد إلكتروني على حسابك لإرسال الرسالة التجريبية إليه.' } });
+  try {
+    const r = await sendMailUnified({
+      to, subject: 'رسالة تجريبية من النظام',
+      text: 'إعدادات البريد تعمل بنجاح.',
+      html: '<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;">إعدادات البريد تعمل بنجاح ✅</div>',
+    });
+    return res.json({ data: { sent: true, provider: r.provider, to: maskEmail(to) }, error: null });
+  } catch (e) {
+    return res.status(500).json({ data: null, error: { message: (e && e.mailProblems ? e.mailProblems.join(' — ') : (e && e.message) || 'فشل غير متوقع') } });
+  }
+});
+
 app.post('/api/2fa/forgot/start', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (!supabase) return res.status(500).json({ data: null, error: { message: 'الخادم غير مهيّأ بعد.' } });
@@ -842,8 +950,10 @@ app.post('/api/2fa/forgot/start', async (req, res) => {
       msg = 'تعذّر إرسال البريد: بيانات تسجيل الدخول (SMTP_USER أو SMTP_PASS) غير صحيحة. تأكد من أن SMTP_PASS هي كلمة مرور التطبيق (App Password) الصحيحة وأنها لم تُلغَ.';
     } else if (e && (e.code === 'ECONNECTION' || e.code === 'ETIMEDOUT' || e.code === 'ESOCKET')) {
       msg = 'تعذّر إرسال البريد: تعذّر الاتصال بخادم البريد. تأكد من صحة SMTP_HOST وSMTP_PORT.';
+    } else if (e && e.mailProblems && e.mailProblems.length) {
+      // فشل كل المزوّدين — نعرض السبب والحل كما جاء من طبقة البريد
+      msg = 'تعذّر إرسال البريد. ' + e.mailProblems.join(' — ');
     } else if (e && e.message && (e.message.includes('Resend') || e.message.includes('Brevo') || e.message.includes('SendGrid'))) {
-      // رسائل Resend/Brevo تحمل تفاصيل مفيدة أصلاً (رمز الحالة ونص الخطأ من مزوّد البريد نفسه)
       msg = 'تعذّر إرسال البريد: ' + e.message;
     }
     return res.status(500).json({ data: null, error: { message: msg } });
