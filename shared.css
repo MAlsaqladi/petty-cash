@@ -24,7 +24,10 @@
   --shadow:0 1px 2px rgba(20,38,27,.05), 0 8px 24px -12px rgba(20,38,27,.20);
 }
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;overflow-x:hidden;}
+/* overflow-x:clip بدل hidden — لأن hidden يجعل body حاوية تمرير، وهذا يُبطل
+   position:sticky للقائمة الجانبية فتنزل مع الصفحة. clip يمنع التمرير
+   الأفقي دون إنشاء حاوية تمرير. */
+html,body{margin:0;padding:0;overflow-x:clip;}
 body{
   background:var(--bg);
   color:var(--ink);
@@ -158,9 +161,13 @@ a{color:inherit;}
    APP SHELL
    ===================================================== */
 #app-shell{display:flex;min-height:100vh;}
+/* القائمة الجانبية ثابتة تمامًا على الشاشات الكبيرة: لا تتحرك مع تمرير
+   المحتوى إطلاقًا. نستخدم position:fixed بدل sticky لأنه لا يتأثر بأي
+   خاصية overflow على العناصر الأب، ثم نُزيح المحتوى بمقدار عرضها. */
 .sidebar{
   width:230px;flex-shrink:0;color:#c9d6cc;
-  display:flex;flex-direction:column;padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto;
+  display:flex;flex-direction:column;padding:20px 14px;
+  position:fixed;top:0;inset-inline-end:0;height:100vh;overflow-y:auto;z-index:30;
   background-color:var(--ink);
   background-image:
     linear-gradient(rgba(20,38,27,.9), rgba(20,38,27,.9)),
@@ -194,7 +201,7 @@ a{color:inherit;}
 .sidebar-backdrop{display:none;}
 #burgerBtn{display:none;}
 
-.main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;margin-inline-end:230px;}
 .topbar{
   background:var(--panel);border-bottom:1px solid var(--line);
   padding:14px 26px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:20;
@@ -360,6 +367,8 @@ table.tbl tbody tr:hover{background:var(--paper);}
 
 @media(max-width:880px){
   #app-shell{display:block;}
+  /* على الجوال تنزلق القائمة فوق المحتوى، فلا حاجة لإزاحته */
+  .main{margin-inline-end:0;}
 
   /* القائمة الجانبية تنزلق من الجانب فوق المحتوى، مع زر تبديل واضح ولمسة خلفية للإغلاق.
      نستخدم transform:translateX بدل right السالب، لأنه يزيح العنصر بمقدار عرضه
