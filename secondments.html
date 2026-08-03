@@ -411,7 +411,11 @@ const Perm = {
   isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
   canManageUsers: u => !Perm.isBasicStaff(u) && !Perm.isBoardMember(u),
-  canChangeUserStatus: u => Perm.isTopApprover(u),
+  // المراجع مشرف على كل الاتحادات فيغيّر حالة أي مستخدم؛ رئيس الاتحاد
+  // والمدير التنفيذي داخل اتحادهم فقط. ولا أحد يغيّر حالة حسابه هو.
+  canChangeUserStatus: u => Perm.isTopApprover(u) || Perm.isAuditor(u),
+  canChangeUserStatusFor: (u,target) => target && target.user_id!==u.user_id &&
+    (Perm.isAuditor(u) ? true : (Perm.isTopApprover(u) && target.federation_id===u.federation_id)),
   canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
   canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u) || Perm.isBoardMember(u),
   canAddExpenseType: u => Perm.isAuditor(u),
@@ -2250,7 +2254,7 @@ Views.users = function(){
   const statsHTML = statsGridHTML(computeSecondmentsUsersStats(list));
   function rowsFor(items){
     return items.length ? items.map(x=>{
-    const canChangeStatus = Perm.canChangeUserStatus(u) && x.federation_id===u.federation_id;
+    const canChangeStatus = Perm.canChangeUserStatusFor(u, x);
     const canEdit = Perm.canEditUser(u,x);
     const stats = userTravelStats(x.user_id);
     return `<tr>
@@ -2388,7 +2392,7 @@ Actions.updateUser = async function(userId){
 Actions.setUserStatus = async function(userId,status){
   const u = Session.user;
   const target = DB.users.find(x=>x.user_id===userId);
-  if(!Perm.canChangeUserStatus(u) || target.federation_id!==u.federation_id){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
+  if(!Perm.canChangeUserStatusFor(u, target)){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
   const { error } = await apiAction('changeUserStatus', { userId, newStatus: status });
   if(error){ toast('تعذّر تحديث الحالة: ' + error.message, 'danger'); return; }
   await refreshAfterAction();
