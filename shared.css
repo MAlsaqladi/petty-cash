@@ -164,12 +164,12 @@ a{color:inherit;}
 /* القائمة الجانبية ثابتة تمامًا على الشاشات الكبيرة: لا تتحرك مع تمرير
    المحتوى إطلاقًا. نستخدم position:fixed بدل sticky لأنه لا يتأثر بأي
    خاصية overflow على العناصر الأب، ثم نُزيح المحتوى بمقدار عرضها.
-   ملاحظة: نستخدم inset-inline-start لا end — لأن الاتجاه rtl فبداية السطر
-   هي اليمين، وهو موضع القائمة الأصلي. */
+   نستخدم right/margin-right الفيزيائيين لا الخصائص المنطقية، لأن الواجهة
+   rtl دائمًا وهذا لا يحتمل أي التباس في تفسير المتصفح. */
 .sidebar{
   width:230px;flex-shrink:0;color:#c9d6cc;
   display:flex;flex-direction:column;padding:20px 14px;
-  position:fixed;top:0;inset-inline-start:0;height:100vh;overflow-y:auto;z-index:30;
+  position:fixed;top:0;right:0;left:auto;height:100vh;overflow-y:auto;z-index:30;
   background-color:var(--ink);
   background-image:
     linear-gradient(rgba(20,38,27,.9), rgba(20,38,27,.9)),
@@ -203,7 +203,7 @@ a{color:inherit;}
 .sidebar-backdrop{display:none;}
 #burgerBtn{display:none;}
 
-.main{flex:1;min-width:0;display:flex;flex-direction:column;margin-inline-start:230px;}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;margin-right:230px;}
 .topbar{
   background:var(--panel);border-bottom:1px solid var(--line);
   padding:14px 26px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:20;
@@ -370,7 +370,7 @@ table.tbl tbody tr:hover{background:var(--paper);}
 @media(max-width:880px){
   #app-shell{display:block;}
   /* على الجوال تنزلق القائمة فوق المحتوى، فلا حاجة لإزاحته */
-  .main{margin-inline-start:0;}
+  .main{margin-right:0;}
 
   /* القائمة الجانبية تنزلق من الجانب فوق المحتوى، مع زر تبديل واضح ولمسة خلفية للإغلاق.
      نستخدم transform:translateX بدل right السالب، لأنه يزيح العنصر بمقدار عرضه
