@@ -122,7 +122,7 @@ function fmtDate(d){
   try{
     const dt = (d instanceof Date) ? d : new Date(d);
     if(isNaN(dt.getTime())) return String(d);
-    return dt.toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric',numberingSystem:'latn'});
+    return dt.toLocaleDateString('ar',{calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'short',day:'numeric'});
   }catch(e){ return String(d); }
 }
 function fmtDateTime(d){
@@ -130,12 +130,12 @@ function fmtDateTime(d){
   try{
     const dt = (d instanceof Date) ? d : new Date(d);
     if(isNaN(dt.getTime())) return String(d);
-    return dt.toLocaleString('ar-SA',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',numberingSystem:'latn'});
+    return dt.toLocaleString('ar',{calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
   }catch(e){ return String(d); }
 }
 function money(n){
   n = Number(n||0);
-  return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2,numberingSystem:'latn'}) + ' ر.س';
+  return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ر.س';
 }
 function esc(s){
   if(s===null||s===undefined) return '';
@@ -826,7 +826,9 @@ App.go = function(view, params){
   App.setActiveNav(view);
   const meta = VIEW_TITLES[view] || {title:'',crumb:''};
   document.getElementById('topTitle').textContent = meta.title;
-  document.getElementById('topCrumb').textContent = meta.crumb;
+  // نُظهر الفترة الفعّالة دائمًا تحت العنوان، لأن كل الأرقام والإحصائيات
+  // في كل الصفحات محسوبة عليها
+  document.getElementById('topCrumb').textContent = meta.crumb + ' · الفترة: ' + periodLabel();
   window.scrollTo(0,0);
   // أغلق القائمة الجانبية تلقائيًا بعد التنقل عند العرض على الجوال
   document.getElementById('sidebar').classList.remove('open');
@@ -3054,7 +3056,7 @@ Views.costCenters = function(){
       <div><div class="eyebrow">التصنيف المالي</div><h2>مراكز التكلفة</h2></div>
       ${addBtn}
     </div>
-    <div class="alert alert-info">مراكز التكلفة الرئيسية السبعة ثابتة لكل الاتحادات (فني، تشغيلي، المعسكرات الداخلية، المعسكرات الخارجية، البطولات الداخلية، البطولات الخارجية، الأنشطة والمبادرات الأخرى). يمكن للمحاسب أو المدير التنفيذي أو رئيس الاتحاد إضافة مراكز فرعية تحتها فقط — لا يمكن إضافة مراكز رئيسية جديدة.</div>
+    <div class="alert alert-info">المبالغ المعروضة محسوبة على الفترة المختارة بالأعلى (${esc(periodLabel())}) — غيّر الفترة واضغط مزامنة ليتغيّر الجمع. مراكز التكلفة الرئيسية السبعة ثابتة لكل الاتحادات (فني، تشغيلي، المعسكرات الداخلية، المعسكرات الخارجية، البطولات الداخلية، البطولات الخارجية، الأنشطة والمبادرات الأخرى). يمكن للمحاسب أو المدير التنفيذي أو رئيس الاتحاد إضافة مراكز فرعية تحتها فقط — لا يمكن إضافة مراكز رئيسية جديدة.</div>
     ${list.length ? bodyHTML : `<div class="empty-row"><div class="ico">🏷️</div>لا توجد مراكز تكلفة بعد</div>`}
   `;
 };
