@@ -144,6 +144,39 @@ function fmtDateTime(d){
 }
 function money(n){ n=Number(n||0); return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2,numberingSystem:'latn'}) + ' ر.س'; }
 function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* ---- إدخال الأرقام ----
+   الحقول الرقمية صارت type="text" مع inputmode="decimal" بدل type="number".
+   السبب: مع type="number" أي رقم يُكتب بالأرقام العربية (٠١٢٣...) أو أي حرف
+   غير مقبول يجعل قيمة الحقل فارغة تمامًا عند المتصفح، فيبدو للمستخدم أن ما
+   يكتبه لا يُحفظ أو يُمسح. كما أن حقول type="number" لا تدعم selectionStart
+   فيصعب الحفاظ على موضع المؤشر عند إعادة الرسم.
+   toEnDigits: يحوّل الأرقام العربية/الفارسية إلى إنجليزية.
+   sanitizeNum: يسمح فقط بالأرقام وفاصلة عشرية واحدة.
+   numVal: يحوّل النص إلى رقم بأمان. */
+function toEnDigits(s){
+  if(s===null||s===undefined) return '';
+  return String(s)
+    .replace(/[\u0660-\u0669]/g, c=>String(c.charCodeAt(0)-0x0660))
+    .replace(/[\u06F0-\u06F9]/g, c=>String(c.charCodeAt(0)-0x06F0));
+}
+function sanitizeNum(s){
+  let v = toEnDigits(s).replace(/[\u066B\u066C,،]/g,'.').replace(/[^\d.]/g,'');
+  const i = v.indexOf('.');
+  if(i !== -1) v = v.slice(0,i+1) + v.slice(i+1).replace(/\./g,'');
+  return v;
+}
+function numVal(s){ const v = sanitizeNum(s); return v==='' ? 0 : (Number(v)||0); }
+/* يُستدعى من oninput: ينظّف ما كتبه المستخدم داخل الحقل نفسه دون فقد المؤشر،
+   ثم يعيد النص النظيف ليُخزَّن في المسودة. */
+function numInput(el){
+  const clean = sanitizeNum(el.value);
+  if(clean !== el.value){
+    const pos = (el.selectionStart!=null) ? el.selectionStart - (el.value.length - clean.length) : null;
+    el.value = clean;
+    if(pos!=null && el.setSelectionRange){ try{ el.setSelectionRange(Math.max(0,pos), Math.max(0,pos)); }catch(e){} }
+  }
+  return clean;
+}
 /* إعادة رسم جسم نموذج مفتوح مع الحفاظ على تركيز الحقل الحالي وموضع المؤشر
    بداخله. بدون هذا، أي إعادة رسم أثناء الكتابة (كل ضغطة زر بحقول الأرقام
    والتواريخ) كانت تُدمّر عنصر الإدخال وتُنشئ غيره، فيفقد التركيز وتظهر
@@ -153,6 +186,9 @@ function rerenderKeepFocus(containerId, html){
   if(!body) return;
   const active = document.activeElement;
   const activeId = (active && body.contains(active) && active.id) ? active.id : null;
+  // نحفظ القيمة الحيّة للحقل النشط كما هي على الشاشة، لأن المسودة قد لا تكون
+  // تحدّثت بعد (مثلاً أثناء الكتابة)، فلا يُمسح ما كتبه المستخدم بعد الرسم.
+  const activeVal = activeId ? active.value : null;
   // قراءة selectionStart/selectionEnd تُطلق استثناءً على حقول type="number"
   // بمعظم المتصفحات (لا تدعم تحديد النص) — لهذا لازم تُغلَّف بمحاولة/التقاط
   // منفصلة، وإلا تتوقف الدالة كاملة قبل إعادة الرسم أصلاً.
@@ -164,6 +200,9 @@ function rerenderKeepFocus(containerId, html){
   if(activeId){
     const el = document.getElementById(activeId);
     if(el){
+      if(activeVal != null && el.value !== activeVal && el.tagName !== 'SELECT'){
+        try{ el.value = activeVal; }catch(e){}
+      }
       el.focus();
       if(selStart != null && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
     }
@@ -1518,7 +1557,7 @@ Modals.addParticipantDraft = function(){
    - أي نوع آخر (موظف/محاسب/موارد بشرية/حكم/متعاون/لاعب...): اقتصادية تلقائيًا دائمًا، بدون اختيار. */
 function ticketTypeMode(resolvedType, hoursCount){
   if(resolvedType==='رئيس الاتحاد') return 'choice';
-  if(resolvedType==='مدير تنفيذي') return (Number(hoursCount||0) > 6) ? 'choice' : 'forced';
+  if(resolvedType==='مدير تنفيذي') return (numVal(hoursCount) > 6) ? 'choice' : 'forced';
   return 'forced';
 }
 Modals.renderAddParticipantBody = function(){
@@ -1558,7 +1597,7 @@ Modals.renderAddParticipantBody = function(){
     ? `<div class="field"><label>نوع التذكرة <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('ticket_type',this.value)">${ticketOpts}</select></div>`
     : `<div class="field"><label>نوع التذكرة</label><input type="text" value="اقتصادية" disabled></div>`;
   const hoursBlock = resolvedType==='مدير تنفيذي'
-    ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="number" id="pgHours" min="0" step="0.5" value="${esc(d.hours_count)}" oninput="ParticipantDraft.hours_count=this.value" onchange="Modals.updateParticipantField('hours_count',this.value)"></div>`
+    ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="text" inputmode="decimal" autocomplete="off" id="pgHours" placeholder="مثال: 7.5" value="${esc(d.hours_count)}" oninput="ParticipantDraft.hours_count=numInput(this)" onblur="Modals.updateParticipantField('hours_count',numInput(this))"></div>`
     : '';
 
   /* المبرر يظهر فقط إذا كانت غير مطابقة لتفاصيل الرحلة */
@@ -1620,7 +1659,7 @@ Actions.saveParticipant = async function(){
     if(!d.start_date || !d.end_date){ toast('أدخل تاريخ البداية والنهاية','danger'); return; }
     if(!d.justification || !d.justification.trim()){ toast('المبرر إلزامي عند عدم المطابقة لتفاصيل الرحلة','danger'); return; }
   }
-  if(resolvedType==='مدير تنفيذي' && !d.hours_count){ toast('أدخل عدد ساعات الرحلة','danger'); return; }
+  if(resolvedType==='مدير تنفيذي' && (sanitizeNum(d.hours_count)==='' || numVal(d.hours_count)<=0)){ toast('أدخل عدد ساعات الرحلة','danger'); return; }
   const startDate = d.is_linked_to_trip ? t.start_date : (d.start_date||null);
   const endDate = d.is_linked_to_trip ? t.end_date : (d.end_date||null);
   const days = d.is_linked_to_trip ? sourceDaysCount(t) : sourceDaysCount(d);
@@ -1632,7 +1671,7 @@ Actions.saveParticipant = async function(){
     amount_delegations: amount, is_linked_to_trip: !!d.is_linked_to_trip, justification: d.is_linked_to_trip ? null : d.justification,
     delegation_days_count: days, start_date:startDate, end_date:endDate,
     is_transportation_available: transport, is_accommodation_available: accom,
-    achieved_goal:null, hours_count: d.hours_count?Number(d.hours_count):null,
+    achieved_goal:null, hours_count: sanitizeNum(d.hours_count)!==''?numVal(d.hours_count):null,
     ticket_type: d.ticket_type, is_car_traveler: false,
     ticket_price: 0, total_amount: amount, file: null, ticket_submitted:false,
     created_by: u.user_id, created_at: nowISO(), request_approved_by:null, request_approval_date:null
@@ -1723,7 +1762,7 @@ Modals.renderTicketInfoBody = function(){
   const p = DB.delegations.find(x=>x.delegation_id===d.delegationId);
   const t = DB.trips.find(x=>x.trip_id===d.tripId);
   const carEligible = t.entity==='المملكة';
-  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? Number(d.ticket_price||0)*0.75 : Number(d.ticket_price||0);
+  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? numVal(d.ticket_price)*0.75 : numVal(d.ticket_price);
   const total = effectiveTicketCost + Number(p.amount_delegations||0);
   const carBlock = carEligible
     ? `<div class="field"><label>تعويض مقابل التذكرة بسبب السفر بالسيارة؟ <span class="muted">— يُحتسب 75% من سعر التذكرة</span></label><select onchange="Modals.updateTicketInfoField('is_car_traveler',this.value==='true')">
@@ -1731,7 +1770,7 @@ Modals.renderTicketInfoBody = function(){
     : '';
   return `
     <div class="form-grid">
-      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي${carEligible&&d.is_car_traveler?' — يُحتسب 75% منه فقط':''}</span></label><input type="number" id="tiPrice" min="0" step="0.01" value="${d.ticket_price}" oninput="Modals.updateTicketInfoField('ticket_price',this.value)"></div>
+      <div class="field"><label>سعر التذكرة <span class="muted">— إلزامي${carEligible&&d.is_car_traveler?' — يُحتسب 75% منه فقط':''}</span></label><input type="text" inputmode="decimal" autocomplete="off" id="tiPrice" placeholder="مثال: 5000" value="${esc(Number(d.ticket_price||0)===0 ? '' : d.ticket_price)}" oninput="Modals.updateTicketInfoField('ticket_price',numInput(this))"></div>
       ${carBlock}
       <div class="field full"><label>مرفق (صورة/PDF للتذكرة) <span class="muted">— إلزامي</span></label><input type="file" id="tiFile" accept="image/*,.pdf"></div>
     </div>
@@ -1751,7 +1790,7 @@ Modals.updateTicketInfoField = function(key,val){
   const p = DB.delegations.find(x=>x.delegation_id===d.delegationId);
   const t = DB.trips.find(x=>x.trip_id===d.tripId);
   const carEligible = t.entity==='المملكة';
-  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? Number(d.ticket_price||0)*0.75 : Number(d.ticket_price||0);
+  const effectiveTicketCost = (carEligible && d.is_car_traveler) ? numVal(d.ticket_price)*0.75 : numVal(d.ticket_price);
   const total = effectiveTicketCost + Number(p.amount_delegations||0);
   const totalEl = document.getElementById('tiTotalAmount');
   if(totalEl) totalEl.textContent = money(total);
@@ -1767,12 +1806,12 @@ Actions.submitTicketInfo = async function(){
     const p = DB.delegations.find(x=>x.delegation_id===d.delegationId);
     const t = DB.trips.find(x=>x.trip_id===d.tripId);
     if(!Perm.canEnterTicketInfo(u,t,p)){ toast('لا تملك صلاحية إدخال بيانات التذكرة','danger'); return; }
-    if(d.ticket_price===''||d.ticket_price===null||d.ticket_price===undefined||Number(d.ticket_price)<0){ toast('أدخل سعر تذكرة صحيح','danger'); return; }
+    if(sanitizeNum(d.ticket_price)==='' || numVal(d.ticket_price)<=0){ toast('أدخل سعر تذكرة صحيح','danger'); return; }
     const fileInput = document.getElementById('tiFile');
     if(!fileInput || !fileInput.files[0]){ toast('مرفق التذكرة إلزامي','danger'); return; }
     const up = await apiUpload(fileInput.files[0], 'delegations');
     if(up.error){ toast('تعذّر رفع المرفق: '+up.error.message,'danger'); return; }
-    const { message, error } = await apiAction('submitTicketInfo', { delegationId: d.delegationId, ticketPrice: Number(d.ticket_price), isCarTraveler: !!d.is_car_traveler, filePath: up.data.path });
+    const { message, error } = await apiAction('submitTicketInfo', { delegationId: d.delegationId, ticketPrice: numVal(d.ticket_price), isCarTraveler: !!d.is_car_traveler, filePath: up.data.path });
     if(error){ toast('تعذّر الحفظ: ' + error.message, 'danger'); return; }
     await refreshAfterAction();
     closeModal(); toast(message || 'تم حفظ بيانات التذكرة','success'); App.go('tripDetail',{id:d.tripId});
@@ -1804,7 +1843,7 @@ Modals.renderAddOtherExpenseBody = function(etOpts){
       <div class="field full"><label>المستفيد (نوع المستخدم) <span class="muted">— يمكن اختيار أكثر من نوع</span></label>
         <div class="chip-select" id="oeBeneficiarySelect">${beneficiaryChips}</div>
       </div>
-      <div class="field"><label>المبلغ</label><input type="number" id="oeAmount" min="0" step="0.01"></div>
+      <div class="field"><label>المبلغ</label><input type="text" inputmode="decimal" autocomplete="off" id="oeAmount" placeholder="مثال: 1500" oninput="numInput(this)"></div>
       <div class="field full"><label>المبرر / البيان</label><textarea rows="2" id="oeJustification"></textarea></div>
       <div class="field full"><label>مرفق</label><input type="file" id="oeFile" accept="image/*,.pdf"></div>
     </div>`;
@@ -1831,7 +1870,7 @@ Actions.saveOtherExpense = async function(tripId){
   const expType = document.getElementById('oeType').value;
   if(!expType){ toast('أضف نوع مصروف واحد على الأقل أولاً من صفحة "أنواع المصاريف"','danger'); return; }
   if(!OtherExpenseBeneficiaries.length){ toast('اختر نوع مستخدم واحدًا على الأقل كمستفيد','danger'); return; }
-  const amt = Number(document.getElementById('oeAmount').value||0);
+  const amt = numVal(document.getElementById('oeAmount').value);
   if(!amt || amt<=0){ toast('أدخل مبلغًا صحيحًا','danger'); return; }
   let filePath = null;
   const fileInput = document.getElementById('oeFile');
