@@ -22,6 +22,7 @@
   .period-bar{width:100%;justify-content:flex-start;}
   .period-input{flex:1;min-width:120px;}
 }
+#perOpenBtn.on{background:var(--primary,#2f6f4e);color:#fff;border-color:var(--primary,#2f6f4e);}
 @media print{ .period-bar{display:none !important;} }
 </style>
 </head>
@@ -68,6 +69,7 @@
         <input type="date" lang="en-GB" id="perFrom" class="period-input" aria-label="من تاريخ">
         <span class="period-sep">←</span>
         <input type="date" lang="en-GB" id="perTo" class="period-input" aria-label="إلى تاريخ">
+        <button class="btn btn-outline btn-sm" id="perOpenBtn" onclick="App.toggleIncludeOpen()" title="إظهار كل الرحلات غير المغلقة حتى لو كانت من فترات سابقة">🔓 الرحلات المفتوحة</button>
         <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="آخر سنة">آخر سنة</button>
         <button class="btn btn-primary btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
       </div>
@@ -154,15 +156,15 @@ function uid(prefix){ return prefix + Math.random().toString(16).slice(2,10); }
 function nowISO(){ return new Date().toISOString(); }
 function fmtDate(d){
   if(!d) return '—';
-  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleDateString('ar-SA',{year:'numeric',month:'short',day:'numeric',numberingSystem:'latn'}); }
+  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleDateString('ar',{calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'short',day:'numeric'}); }
   catch(e){ return String(d); }
 }
 function fmtDateTime(d){
   if(!d) return '—';
-  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleString('ar-SA',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',numberingSystem:'latn'}); }
+  try{ const dt=(d instanceof Date)?d:new Date(d); if(isNaN(dt.getTime())) return String(d); return dt.toLocaleString('ar',{calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}); }
   catch(e){ return String(d); }
 }
-function money(n){ n=Number(n||0); return n.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2,numberingSystem:'latn'}) + ' ر.س'; }
+function money(n){ n=Number(n||0); return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' ر.س'; }
 function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 /* ---- إدخال الأرقام ----
    الحقول الرقمية صارت type="text" مع inputmode="decimal" بدل type="number".
@@ -275,17 +277,19 @@ function defaultPeriod(){
   const to = new Date();
   const from = new Date(to.getFullYear()-1, to.getMonth(), to.getDate());
   const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
-  return { from: iso(from), to: iso(to) };
+  return { from: iso(from), to: iso(to), includeOpen: true };
 }
 let Period = (function(){
   try{
     const saved = JSON.parse(localStorage.getItem(PERIOD_KEY) || 'null');
-    if(saved && saved.from && saved.to) return saved;
+    if(saved && saved.from && saved.to) return { from:saved.from, to:saved.to, includeOpen: saved.includeOpen !== false };
   }catch(e){}
   return defaultPeriod();
 })();
 function savePeriod(){ try{ localStorage.setItem(PERIOD_KEY, JSON.stringify(Period)); }catch(e){} }
-function periodLabel(){ return `${Period.from} ← ${Period.to}`; }
+function periodLabel(){ return `${Period.from} ← ${Period.to}` + (Period.includeOpen ? ' + الرحلات المفتوحة' : ''); }
+/* الحالات التي تُعتبر "رحلة مفتوحة/غير مغلقة" */
+const OPEN_TRIP_STATUSES = ['طلب','قيد الصرف'];
 
 /* يقسّم قائمة المعرّفات لدفعات، لأن الخادم يقبل 1000 معرّف كحد أقصى بالطلب */
 function chunk(arr, size){ const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; }
@@ -306,10 +310,17 @@ async function loadAllData(){
     selectScoped('cost_centers', null), selectScoped('expense_types', null),
   ]);
   // الرحلات داخل الفترة (حسب تاريخ البداية، ومن لا تاريخ بداية له فحسب تاريخ إنشائه)
-  const trips = await selectScoped('trips', {
+  const calls = [ selectScoped('trips', {
     dateField: 'start_date', dateFallbackField: 'created_at',
     dateFrom: Period.from, dateTo: Period.to,
-  });
+  }) ];
+  // كل الرحلات غير المغلقة تُضاف دائمًا عند تفعيل الزر، مهما كان تاريخها،
+  // حتى لا تختفي رحلة قديمة ما زالت مفتوحة عند تضييق الفترة
+  if(Period.includeOpen) calls.push(selectScoped('trips', { statusField:'trip_status', statusValues: OPEN_TRIP_STATUSES }));
+  const parts = await Promise.all(calls);
+  const seen = new Set();
+  const trips = [];
+  parts.flat().forEach(t => { if(!seen.has(t.trip_id)){ seen.add(t.trip_id); trips.push(t); } });
   const tripIds = trips.map(t => t.trip_id);
   const [delegations, other_expenses] = await Promise.all([
     selectByParents('delegations', 'trip_id', tripIds),
@@ -437,6 +448,24 @@ function visibleUsers(u){
   if(!u) return [];
   if(Perm.isAuditor(u)) return DB.users.slice();
   return DB.users.filter(x=>x.federation_id===u.federation_id);
+}
+/* إجمالي المصروف المعتمد المنسوب لمركز تكلفة — يُحتسب من الرحلات المحمّلة
+   ضمن الفترة المختارة فقط، فيتغيّر الجمع تلقائيًا مع تغيّر الفلتر بالأعلى.
+   الرحلة قد ترتبط بأكثر من مركز تكلفة، فيُوزَّع مبلغها عليها بالتساوي. */
+function ccSpentSecondments(ccId){
+  let total = 0;
+  DB.trips.forEach(t => {
+    if(t.trip_status === 'مرفوضة') return;
+    const ids = tripCostCenterIds(t);
+    if(!ids.includes(ccId)) return;
+    const share = 1 / ids.length;
+    const dele = DB.delegations.filter(d => d.trip_id===t.trip_id && (d.delegations_status==='معتمد' || d.delegations_status==='قيد الصرف'))
+      .reduce((sum,d)=> sum + Number(d.total_amount||0), 0);
+    const oth = DB.other_expenses.filter(e => e.trip_id===t.trip_id && e.expense_status==='معتمد')
+      .reduce((sum,e)=> sum + Number(e.amount||0), 0);
+    total += (dele + oth) * share;
+  });
+  return total;
 }
 function visibleCostCenters(u){
   if(!u) return [];
@@ -633,10 +662,18 @@ App.resetPeriod = function(){
   App.syncPeriodInputs();
   App.syncData();
 };
+App.toggleIncludeOpen = function(){
+  Period.includeOpen = !Period.includeOpen;
+  savePeriod();
+  App.syncPeriodInputs();
+  App.syncData();
+};
 App.syncPeriodInputs = function(){
   const f = document.getElementById('perFrom'), t = document.getElementById('perTo');
   if(f) f.value = Period.from;
   if(t) t.value = Period.to;
+  const ob = document.getElementById('perOpenBtn');
+  if(ob) ob.classList.toggle('on', !!Period.includeOpen);
 };
 /* بعد أي إجراء حسّاس (اعتماد/رفض/إقفال) على الخادم، نعيد تحميل البيانات كاملة بدل تعديلها يدويًا */
 async function refreshAfterAction(){
@@ -698,7 +735,9 @@ App.go = function(view, params){
   App.setActiveNav(view);
   const meta = VIEW_META[view] || {title:'',crumb:''};
   document.getElementById('topTitle').textContent = meta.title;
-  document.getElementById('topCrumb').textContent = meta.crumb;
+  // نُظهر الفترة الفعّالة دائمًا تحت العنوان، لأن كل الأرقام والإحصائيات
+  // في كل الصفحات محسوبة عليها
+  document.getElementById('topCrumb').textContent = meta.crumb + ' · الفترة: ' + periodLabel();
   window.scrollTo(0,0);
   // أغلق القائمة الجانبية تلقائيًا بعد التنقل عند العرض على الجوال
   document.getElementById('sidebar').classList.remove('open');
@@ -2472,17 +2511,18 @@ Views.costcenters = function(){
     return mainCenters.length ? mainCenters.map(main=>{
       const subs = items.filter(c=>c.parent_cost_center_id===main.cost_center_id);
       const subRows = subs.length ? subs.map(cc=>`
-        <tr><td>${esc(cc.cost_center_name_ar)}</td><td>${esc(cc.cost_center_name_en||'—')}</td><td>${fmtDate(cc.created_at)}</td></tr>
-      `).join('') : `<tr><td colspan="3"><div class="empty-row">لا توجد مراكز فرعية بعد تحت هذا المركز</div></td></tr>`;
+        <tr><td>${esc(cc.cost_center_name_ar)}</td><td>${esc(cc.cost_center_name_en||'—')}</td><td class="num">${money(ccSpentSecondments(cc.cost_center_id))}</td><td>${fmtDate(cc.created_at)}</td></tr>
+      `).join('') : `<tr><td colspan="4"><div class="empty-row">لا توجد مراكز فرعية بعد تحت هذا المركز</div></td></tr>`;
       return `<div class="card mt-16">
         <div class="card-pad" style="padding-bottom:0;">
           <div class="section-head" style="margin-bottom:8px;">
             <h3 style="font-size:14px;margin:0;">🏷 ${esc(main.cost_center_name_ar)}</h3>
             <span class="chip" style="cursor:default;">${subs.length} فرعي</span>
+            <span class="chip" style="cursor:default;">المصروف: ${money(ccSpentSecondments(main.cost_center_id))}</span>
           </div>
         </div>
         <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
-          <table class="tbl"><thead><tr><th>الاسم (عربي)</th><th>الاسم (إنجليزي)</th><th>تاريخ الإضافة</th></tr></thead><tbody>${subRows}</tbody></table>
+          <table class="tbl"><thead><tr><th>الاسم (عربي)</th><th>الاسم (إنجليزي)</th><th>المصروف (ضمن الفترة)</th><th>تاريخ الإضافة</th></tr></thead><tbody>${subRows}</tbody></table>
         </div>
       </div>`;
     }).join('') : `<div class="empty-row mt-16">لا توجد مراكز تكلفة رئيسية بعد</div>`;
@@ -2493,7 +2533,7 @@ Views.costcenters = function(){
     : groupsHTMLFor(list);
   return `
     <div class="section-head"><div><div class="eyebrow">مراكز التكلفة</div><h2>مراكز التكلفة</h2></div>${addBtn}</div>
-    <div class="alert alert-info mt-16">مراكز التكلفة مشتركة مع نظام العهد النقدية — أي تعديل هنا ينعكس هناك والعكس صحيح. المراكز الرئيسية السبعة ثابتة، والإضافة هنا تكون لمراكز فرعية تحتها فقط.</div>
+    <div class="alert alert-info mt-16">المبالغ المعروضة محسوبة على الفترة المختارة بالأعلى (${esc(periodLabel())}) — غيّر الفترة واضغط مزامنة ليتغيّر الجمع. مراكز التكلفة مشتركة مع نظام العهد النقدية — أي تعديل هنا ينعكس هناك والعكس صحيح. المراكز الرئيسية السبعة ثابتة، والإضافة هنا تكون لمراكز فرعية تحتها فقط.</div>
     ${body}
   `;
 };
