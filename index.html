@@ -516,10 +516,25 @@ async function dbUpdate(table, pkField, id, patch){
 /* "users" لا نطلب إرجاع الصف بعد الكتابة (لتفادي أي احتمال لتسريب كلمة
    المرور في الاستجابة)، بل ندمج القيم التي أرسلناها في الحالة المحلية مباشرة. */
 async function dbInsertUser(obj){
-  const { error } = await apiCall({ op:'insert', table:'users', payload: obj, returning: false });
-  if(error){ toast('تعذّر حفظ المستخدم: ' + error.message, 'danger'); return null; }
+  const resp = await apiCall({ op:'insert', table:'users', payload: obj, returning: false });
+  if(resp.error){ toast('تعذّر حفظ المستخدم: ' + resp.error.message, 'danger'); return null; }
   DB.users.push(obj);
-  return obj;
+  // الخادم يُرجع حالة إرسال بيانات الدخول بالبريد عند توليده لكلمة المرور
+  return Object.assign({}, obj, { __mail: resp.mail || null });
+}
+/* إعادة توليد كلمة مرور مؤقتة وإرسالها لبريد المستخدم — لا تُعرض لأحد */
+async function resendCredentials(userId){
+  if(!confirm('سيتم توليد كلمة مرور مؤقتة جديدة وإرسالها إلى بريد المستخدم، وتصبح كلمة المرور الحالية غير صالحة. متابعة؟')) return;
+  let res;
+  try{
+    const r = await fetch('/api/user-credentials/resend', {
+      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(Auth.readToken()||'')},
+      body: JSON.stringify({ userId })
+    });
+    res = await r.json();
+  }catch(e){ toast('تعذّر الاتصال بالخادم','danger'); return; }
+  if(res.error){ toast('تعذّر الإرسال: ' + res.error.message, 'danger'); return; }
+  toast('أُرسلت بيانات الدخول إلى ' + (res.data ? res.data.to : 'بريد المستخدم'), 'success');
 }
 async function dbUpdateUser(userId, patch){
   const { error } = await apiCall({ op:'update', table:'users', pkField:'user_id', id:userId, patch, returning: false });
@@ -2895,7 +2910,7 @@ Modals.addUser = function(){
   const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
   const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
-    <div class="alert alert-info">سيُضاف هذا المستخدم بحالة "تحت المعالجة" لحين اعتماده من رئيس الاتحاد أو المدير التنفيذي.</div>
+    <div class="alert alert-info">سيُضاف هذا المستخدم بحالة "تحت المعالجة" لحين اعتماده من رئيس الاتحاد أو المدير التنفيذي.<br>لا حاجة لكتابة كلمة مرور — يولّدها النظام تلقائيًا ويرسلها إلى بريد المستخدم نفسه، ولا يطّلع عليها أحد سواه.</div>
     <div class="form-grid mt-12">
       ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي) <span class="muted">— إلزامي</span></label><input type="text" id="nuNameAr"></div>
@@ -2903,7 +2918,6 @@ Modals.addUser = function(){
       <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
       <div class="field"><label>المسمى الوظيفي <span class="muted">— إلزامي</span></label><input type="text" id="nuJob"></div>
       <div class="field"><label>اسم المستخدم (للدخول) <span class="muted">— إلزامي</span></label><input type="text" id="nuUsername"></div>
-      <div class="field"><label>كلمة المرور <span class="muted">— إلزامي</span></label><input type="text" id="nuPassword"></div>
       <div class="field"><label>الجوال <span class="muted">— إلزامي</span></label><input type="text" id="nuPhone"></div>
       <div class="field"><label>البريد الإلكتروني <span class="muted">— إلزامي</span></label><input type="email" id="nuEmail"></div>
       <div class="field"><label>رقم الهوية <span class="muted">— اختياري</span></label><input type="text" id="nuNid"></div>
@@ -2923,12 +2937,11 @@ Actions.saveUser = async function(){
   const nameEn = document.getElementById('nuNameEn').value.trim();
   const job = document.getElementById('nuJob').value.trim();
   const username = document.getElementById('nuUsername').value.trim();
-  const password = document.getElementById('nuPassword').value;
   const phone = document.getElementById('nuPhone').value.trim();
   const email = document.getElementById('nuEmail').value.trim();
   const nat = document.getElementById('nuNat').value.trim();
   if(!federationId){ toast('اختر الاتحاد الذي يتبع له المستخدم','danger'); return; }
-  if(!nameAr || !nameEn || !job || !username || !password || !phone || !email || !nat){
+  if(!nameAr || !nameEn || !job || !username || !phone || !email || !nat){
     toast('جميع الحقول إلزامية ما عدا رقم الهوية','danger'); return;
   }
   if(DB.users.some(x=>x.user_name===username)){ toast('اسم المستخدم مستخدم بالفعل','danger'); return; }
@@ -2937,14 +2950,21 @@ Actions.saveUser = async function(){
     employee_name_ar:nameAr, employee_name_en: nameEn,
     national_id: document.getElementById('nuNid').value.trim(), nationality: nat,
     phone: phone, email: email,
-    user_name: username, password: password, user_type: document.getElementById('nuType').value,
+    // بلا كلمة مرور: الخادم يولّدها ويرسلها لبريد المستخدم
+    user_name: username, user_type: document.getElementById('nuType').value,
     Job_Title: job, language:'ar',
     created_at: nowISO(), created_by: u.user_id
   };
   const saved = await dbInsertUser(obj);
   if(!saved) return;
   closeModal();
-  toast('تمت إضافة المستخدم بحالة تحت المعالجة','success');
+  if(saved.__mail && saved.__mail.sent){
+    toast('تمت إضافة المستخدم — أُرسلت بيانات الدخول إلى ' + saved.__mail.to, 'success');
+  }else if(saved.__mail){
+    toast('أُضيف المستخدم لكن تعذّر إرسال البريد: ' + (saved.__mail.reason||'') + ' — استخدم زر إعادة إرسال بيانات الدخول', 'danger');
+  }else{
+    toast('تمت إضافة المستخدم بحالة تحت المعالجة','success');
+  }
   App.render();
 };
 
@@ -2952,14 +2972,14 @@ Modals.editUser = function(userId){
   const x = DB.users.find(u=>u.user_id===userId);
   const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}" ${x.user_type===t?'selected':''}>${t}</option>`).join('');
   const body = `
-    <div class="alert alert-info">التعديل متاح فقط ما دام الحساب بحالة "تحت المعالجة". اترك حقل كلمة المرور فارغًا للإبقاء عليها كما هي.</div>
+    <div class="alert alert-info">التعديل متاح فقط ما دام الحساب بحالة "تحت المعالجة". كلمات المرور لا تُعرض لأحد — إن احتاج المستخدم كلمة مرور جديدة، أرسِلها إلى بريده بالزر أدناه.</div>
     <div class="form-grid mt-12">
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="euNameAr" value="${esc(x.employee_name_ar||'')}"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="euNameEn" value="${esc(x.employee_name_en||'')}"></div>
       <div class="field"><label>نوع المستخدم</label><select id="euType">${typeOpts}</select></div>
       <div class="field"><label>المسمى الوظيفي</label><input type="text" id="euJob" value="${esc(x.Job_Title||'')}"></div>
       <div class="field"><label>اسم المستخدم (للدخول)</label><input type="text" id="euUsername" value="${esc(x.user_name||'')}"></div>
-      <div class="field"><label>كلمة مرور جديدة <span class="muted">— اختياري</span></label><input type="text" id="euPassword" placeholder="اتركه فارغًا للإبقاء على كلمة المرور الحالية"></div>
+      <div class="field"><label>كلمة المرور</label><button type="button" class="btn btn-outline" style="width:100%;" onclick="resendCredentials('${userId}')">✉ إرسال كلمة مرور جديدة لبريد المستخدم</button></div>
       <div class="field"><label>الجوال</label><input type="text" id="euPhone" value="${esc(x.phone||'')}"></div>
       <div class="field"><label>البريد الإلكتروني</label><input type="email" id="euEmail" value="${esc(x.email||'')}"></div>
       <div class="field"><label>رقم الهوية</label><input type="text" id="euNid" value="${esc(x.national_id||'')}"></div>
@@ -2977,7 +2997,6 @@ Actions.updateUser = async function(userId){
   if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم','danger'); return; }
   const nameAr = document.getElementById('euNameAr').value.trim();
   const username = document.getElementById('euUsername').value.trim();
-  const newPassword = document.getElementById('euPassword').value;
   if(!nameAr || !username){ toast('الرجاء تعبئة الاسم واسم المستخدم','danger'); return; }
   if(DB.users.some(o=>o.user_name===username && o.user_id!==userId)){ toast('اسم المستخدم مستخدم بالفعل','danger'); return; }
   const patch = {
@@ -2991,7 +3010,6 @@ Actions.updateUser = async function(userId){
     national_id: document.getElementById('euNid').value.trim(),
     nationality: document.getElementById('euNat').value.trim(),
   };
-  if(newPassword){ patch.password = newPassword; }
   const saved = await dbUpdateUser(userId, patch);
   if(!saved) return;
   closeModal();
