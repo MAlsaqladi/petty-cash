@@ -349,9 +349,25 @@ async function dbDelete(table, pkField, id){
   return true;
 }
 async function dbInsertUser(obj){
-  const { error } = await apiCall({ op:'insert', table:'users', payload: obj, returning:false });
-  if(error){ toast('تعذّر حفظ المستخدم: ' + error.message, 'danger'); return null; }
-  DB.users.push(obj); return obj;
+  const resp = await apiCall({ op:'insert', table:'users', payload: obj, returning:false });
+  if(resp.error){ toast('تعذّر حفظ المستخدم: ' + resp.error.message, 'danger'); return null; }
+  DB.users.push(obj);
+  // الخادم يُرجع حالة إرسال بيانات الدخول بالبريد عند توليده لكلمة المرور
+  return Object.assign({}, obj, { __mail: resp.mail || null });
+}
+/* إعادة توليد كلمة مرور مؤقتة وإرسالها لبريد المستخدم — لا تُعرض لأحد */
+async function resendCredentials(userId){
+  if(!confirm('سيتم توليد كلمة مرور مؤقتة جديدة وإرسالها إلى بريد المستخدم، وتصبح كلمة المرور الحالية غير صالحة. متابعة؟')) return;
+  let res;
+  try{
+    const r = await fetch('/api/user-credentials/resend', {
+      method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+(Auth.readToken()||'')},
+      body: JSON.stringify({ userId })
+    });
+    res = await r.json();
+  }catch(e){ toast('تعذّر الاتصال بالخادم','danger'); return; }
+  if(res.error){ toast('تعذّر الإرسال: ' + res.error.message, 'danger'); return; }
+  toast('أُرسلت بيانات الدخول إلى ' + (res.data ? res.data.to : 'بريد المستخدم'), 'success');
 }
 async function dbUpdateUser(userId, patch){
   const { error } = await apiCall({ op:'update', table:'users', pkField:'user_id', id:userId, patch, returning:false });
@@ -2294,7 +2310,8 @@ Modals.addUser = function(){
   const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
   const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
-    <div class="form-grid">
+    <div class="alert alert-info">لا حاجة لكتابة كلمة مرور — يولّدها النظام تلقائيًا ويرسلها إلى بريد المستخدم نفسه، ولا يطّلع عليها أحد سواه.</div>
+    <div class="form-grid mt-12">
       ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="nuNameAr"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="nuNameEn"></div>
@@ -2303,7 +2320,6 @@ Modals.addUser = function(){
       <div class="field"><label>الجوال</label><input type="text" id="nuPhone"></div>
       <div class="field"><label>البريد الإلكتروني</label><input type="email" id="nuEmail"></div>
       <div class="field"><label>اسم المستخدم (دخول)</label><input type="text" id="nuUsername"></div>
-      <div class="field"><label>كلمة المرور</label><input type="text" id="nuPassword"></div>
     </div>`;
   openModalHTML(modalShell('addUserModal','إضافة مستخدم', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
@@ -2316,18 +2332,28 @@ Actions.saveUser = async function(){
   const federationId = isAud ? (fedInput ? fedInput.value : '') : u.federation_id;
   if(isAud && !federationId){ toast('اختر الاتحاد أولاً','danger'); return; }
   const username = document.getElementById('nuUsername').value.trim();
-  const password = document.getElementById('nuPassword').value;
-  if(!username || !password){ toast('اسم المستخدم وكلمة المرور إلزاميان','danger'); return; }
+  const email = document.getElementById('nuEmail').value.trim();
+  if(!username){ toast('اسم المستخدم إلزامي','danger'); return; }
+  if(!email){ toast('البريد الإلكتروني إلزامي — إليه تُرسل بيانات الدخول','danger'); return; }
   const obj = {
     user_id: uid('usr'), federation_id: federationId, user_status:'تحت المعالجة',
     employee_name_ar: document.getElementById('nuNameAr').value, employee_name_en: document.getElementById('nuNameEn').value,
-    national_id:null, nationality:null, phone: document.getElementById('nuPhone').value, email: document.getElementById('nuEmail').value,
-    user_name: username, password: password, user_type: document.getElementById('nuType').value,
+    national_id:null, nationality:null, phone: document.getElementById('nuPhone').value, email: email,
+    // بلا كلمة مرور: الخادم يولّدها ويرسلها لبريد المستخدم
+    user_name: username, user_type: document.getElementById('nuType').value,
     Job_Title: document.getElementById('nuJob').value, language:'ar', created_at: nowISO(), created_by: u.user_id
   };
   const saved = await dbInsertUser(obj);
   if(!saved) return;
-  closeModal(); toast('تمت إضافة المستخدم — بانتظار التفعيل','success'); App.render();
+  closeModal();
+  if(saved.__mail && saved.__mail.sent){
+    toast('تمت إضافة المستخدم — أُرسلت بيانات الدخول إلى ' + saved.__mail.to, 'success');
+  }else if(saved.__mail){
+    toast('أُضيف المستخدم لكن تعذّر إرسال البريد: ' + (saved.__mail.reason||'') + ' — استخدم زر إعادة إرسال بيانات الدخول', 'danger');
+  }else{
+    toast('تمت إضافة المستخدم — بانتظار التفعيل','success');
+  }
+  App.render();
 };
 Modals.editUser = function(userId){
   const x = DB.users.find(u2=>u2.user_id===userId);
@@ -2340,6 +2366,7 @@ Modals.editUser = function(userId){
       <div class="field"><label>المسمى الوظيفي</label><input type="text" id="euJob" value="${esc(x.Job_Title||'')}"></div>
       <div class="field"><label>الجوال</label><input type="text" id="euPhone" value="${esc(x.phone||'')}"></div>
       <div class="field"><label>البريد الإلكتروني</label><input type="email" id="euEmail" value="${esc(x.email||'')}"></div>
+      <div class="field full"><label>كلمة المرور <span class="muted">— لا تُعرض لأحد</span></label><button type="button" class="btn btn-outline" style="width:100%;" onclick="resendCredentials('${userId}')">✉ إرسال كلمة مرور جديدة لبريد المستخدم</button></div>
     </div>`;
   openModalHTML(modalShell('editUserModal','تعديل بيانات المستخدم', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
