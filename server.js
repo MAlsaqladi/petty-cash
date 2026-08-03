@@ -702,10 +702,14 @@ const ACTIONS = {
   },
 
   async changeUserStatus({ user }, { userId, newStatus }) {
-    if (!SPerm.isTopApprover(user)) throw new ActionError('لا تملك صلاحية تغيير الحالة', 403);
+    // المراجع يملك إشرافًا على كل الاتحادات، فيغيّر حالة أي مستخدم؛ وغيره
+    // من أصحاب الصلاحية (رئيس الاتحاد/المدير التنفيذي) داخل اتحاده فقط.
+    if (!SPerm.isTopApprover(user) && !SPerm.isAuditor(user)) throw new ActionError('لا تملك صلاحية تغيير الحالة', 403);
     if (!USER_STATUS_VALUES.has(newStatus)) throw new ActionError('حالة غير صالحة', 400);
     const target = await getRow('users_public', 'user_id', userId);
-    if (!target || target.federation_id !== user.federation_id) throw new ActionError('المستخدم غير موجود', 404);
+    if (!target) throw new ActionError('المستخدم غير موجود', 404);
+    if (!SPerm.isAuditor(user) && target.federation_id !== user.federation_id) throw new ActionError('المستخدم غير موجود', 404);
+    if (target.user_id === user.user_id) throw new ActionError('لا يمكنك تغيير حالة حسابك أنت', 403);
     await updateRow('users', 'user_id', userId, { user_status: newStatus });
     return { targetTable: 'users', targetId: userId, message: 'تم تحديث حالة المستخدم إلى: ' + newStatus };
   },
@@ -924,6 +928,9 @@ app.post('/api/user-credentials/resend', async (req, res) => {
     const isAud = admin.user_type === 'مراجع';
     if (!isAud && target.federation_id !== admin.federation_id) {
       return res.status(403).json({ data: null, error: { message: 'هذا المستخدم لا يتبع اتحادك.' } });
+    }
+    if (NO_LOGIN_USER_TYPES.has(target.user_type)) {
+      return res.status(400).json({ data: null, error: { message: 'هذا النوع من المستخدمين (لاعب/حكم/متعاون) لا يملك حق الدخول للنظام أصلاً — لا تُرسل له بيانات دخول.' } });
     }
     if (!target.email) return res.status(400).json({ data: null, error: { message: 'لا يوجد بريد إلكتروني مسجَّل على هذا الحساب.' } });
 
