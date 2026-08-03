@@ -9,6 +9,21 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="auth.js"></script>
 <link rel="stylesheet" href="shared.css">
+<style>
+/* شريط الفترة الزمنية أعلى الشاشة — فلتر واحد يسري على كل البرنامج */
+.period-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
+.period-lbl{font-size:12px;font-weight:700;opacity:.75;}
+.period-sep{opacity:.5;font-size:12px;}
+.period-input{font-family:inherit;font-size:12.5px;padding:5px 8px;border-radius:8px;border:1px solid var(--border,#d9ddd6);background:var(--card,#fff);color:inherit;min-width:132px;}
+.period-input:focus{outline:none;border-color:var(--primary,#2f6f4e);}
+#perOpenBtn.on{background:var(--primary,#2f6f4e);color:#fff;border-color:var(--primary,#2f6f4e);}
+@media (max-width:760px){
+  .topbar{flex-wrap:wrap;row-gap:8px;}
+  .period-bar{width:100%;justify-content:flex-start;}
+  .period-input{flex:1;min-width:120px;}
+}
+@media print{ .period-bar{display:none !important;} }
+</style>
 </head>
 <body>
 
@@ -52,8 +67,14 @@
           <div class="crumb" id="topCrumb">—</div>
         </div>
       </div>
-      <div class="flex gap-8 center">
-        <button class="btn btn-outline btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
+      <div class="period-bar">
+        <span class="period-lbl">الفترة</span>
+        <input type="date" lang="en-GB" id="perFrom" class="period-input" aria-label="من تاريخ">
+        <span class="period-sep">←</span>
+        <input type="date" lang="en-GB" id="perTo" class="period-input" aria-label="إلى تاريخ">
+        <button class="btn btn-outline btn-sm" id="perOpenBtn" onclick="App.toggleIncludeOpen()" title="إظهار كل العهد غير المغلقة حتى لو كانت من فترات سابقة">🔓 العهد المفتوحة</button>
+        <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="آخر سنة">آخر سنة</button>
+        <button class="btn btn-primary btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
       </div>
     </div>
     <div id="view" class="paper-bg"></div>
@@ -412,16 +433,68 @@ function attachBtnHTML(filePath){
   return `<button class="btn btn-ghost btn-sm" onclick="viewAttachment('${esc(filePath)}')" title="عرض المرفق">📎 المرفق</button>`;
 }
 
-/* ---------------------------- Bulk load ---------------------------- */
+/* ---------------------------- Bulk load ----------------------------
+   الفترة الزمنية العامة (فلتر واحد لكل البرنامج)
+   -------------------------------------------------------------------
+   بدل تحميل كل صفوف الجداول عند فتح البرنامج (قد تصل لملايين الصفوف مع
+   السنين)، نحمّل العهد الواقعة داخل الفترة المختارة فقط — والافتراضي آخر
+   سنة — ثم نحمّل بنودها وتحويلاتها ومصاريفها التابعة لها فقط.
+   وزر "إظهار العهد المفتوحة" يضيف كل عهدة غير مغلقة مهما كان تاريخها، حتى
+   لا تختفي عهدة قديمة ما زالت مفتوحة عند تضييق الفترة.
+   الفلتر يظهر أعلى الشاشة بجانب زر المزامنة ويسري على كل الصفحات
+   والإحصائيات (الرئيسية، القوائم، المستخدمون، التقارير) بلا استثناء.
+   ------------------------------------------------------------------- */
+const PERIOD_KEY = 'custody_period_v1';
+function defaultPeriod(){
+  const to = new Date();
+  const from = new Date(to.getFullYear()-1, to.getMonth(), to.getDate());
+  const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  return { from: iso(from), to: iso(to), includeOpen: true };
+}
+let Period = (function(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(PERIOD_KEY) || 'null');
+    if(saved && saved.from && saved.to) return { from:saved.from, to:saved.to, includeOpen: saved.includeOpen !== false };
+  }catch(e){}
+  return defaultPeriod();
+})();
+function savePeriod(){ try{ localStorage.setItem(PERIOD_KEY, JSON.stringify(Period)); }catch(e){} }
+function periodLabel(){ return `${Period.from} ← ${Period.to}` + (Period.includeOpen ? ' + العهد المفتوحة' : ''); }
+/* الحالات التي تُعتبر "عهدة مفتوحة/غير مغلقة" */
+const OPEN_CUSTODY_STATUSES = ['مفتوحة','قيد الاعتماد'];
+
+function chunk(arr, size){ const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; }
+async function selectScoped(table, scope){
+  const { data, error } = await apiCall({ op:'select', table: readSource(table), scope });
+  if(error) throw new Error(`تعذّرت قراءة جدول ${table}: ${error.message}`);
+  return data || [];
+}
+async function selectByParents(table, field, ids){
+  if(!ids.length) return [];
+  const parts = await Promise.all(chunk(ids, 800).map(ids2 => selectScoped(table, { inField: field, inValues: ids2 })));
+  return parts.flat();
+}
 async function loadAllData(){
-  const tables = Object.keys(SCHEMA);
-  const results = await Promise.all(tables.map(t => apiCall({ op:'select', table: readSource(t) })));
-  const out = {};
-  for(let i=0;i<tables.length;i++){
-    if(results[i].error){ throw new Error(`تعذّرت قراءة جدول ${tables[i]}: ${results[i].error.message}`); }
-    out[tables[i]] = results[i].data || [];
-  }
-  return out;
+  // جداول مرجعية صغيرة تُحمّل كاملة دائمًا (لا علاقة لها بالفترة)
+  const [federations, users, cost_centers, expense_types] = await Promise.all([
+    selectScoped('federations', null), selectScoped('users', null),
+    selectScoped('cost_centers', null), selectScoped('expense_types', null),
+  ]);
+  // العهد داخل الفترة + (اختياريًا) كل العهد غير المغلقة مهما كان تاريخها
+  const calls = [ selectScoped('custodies', { dateField:'created_at', dateFrom: Period.from, dateTo: Period.to }) ];
+  if(Period.includeOpen) calls.push(selectScoped('custodies', { statusField:'custody_status', statusValues: OPEN_CUSTODY_STATUSES }));
+  const parts = await Promise.all(calls);
+  const seen = new Set();
+  const custodies = [];
+  parts.flat().forEach(c => { if(!seen.has(c.custody_id)){ seen.add(c.custody_id); custodies.push(c); } });
+
+  const ids = custodies.map(c => c.custody_id);
+  const [custody_budgets, custody_transfers, custody_closures] = await Promise.all([
+    selectByParents('custody_budgets', 'custody_id', ids),
+    selectByParents('custody_transfers', 'custody_id', ids),
+    selectByParents('custody_closures', 'custody_id', ids),
+  ]);
+  return { federations, users, cost_centers, expense_types, custodies, custody_budgets, custody_transfers, custody_closures };
 }
 
 /* ---------------------------- Generic write helpers ---------------------------- */
@@ -528,7 +601,6 @@ function buildListPrintHTML(title, subtitle, headers, rows, stats){
     <div class="print-header">
       <div class="print-header-row">
         <div class="print-org">
-          <img src="logo.png" alt="">
           <div>
             <div class="print-org-name">${esc(fed?fed.federation_name_ar:'كل الاتحادات')}</div>
             <div class="print-sys-name">نظام إدارة العهد النقدية</div>
@@ -537,6 +609,7 @@ function buildListPrintHTML(title, subtitle, headers, rows, stats){
         <div class="print-meta">
           <div>تاريخ الطباعة: ${fmtDateTime(nowISO())}</div>
           <div>عدد السجلات: ${rows.length}</div>
+          <div>الفترة: ${esc(periodLabel())}</div>
         </div>
       </div>
       <h1 class="print-title">${esc(title)}</h1>
@@ -618,6 +691,7 @@ async function bootApp(){
     document.getElementById('screen-boot').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
     App.renderShell();
+    App.syncPeriodInputs();
     App.go('dashboard');
   }catch(err){
     console.error(err);
@@ -638,18 +712,46 @@ App.exportExcel = function(){
   toast('تم تنزيل نسخة محدّثة من ملف البيانات', 'success');
 };
 
+/* المزامنة تقرأ الفترة المكتوبة بالأعلى وتعيد تحميل كل البيانات عليها */
 App.syncData = async function(){
+  const fromEl = document.getElementById('perFrom');
+  const toEl = document.getElementById('perTo');
+  if(fromEl && toEl){
+    const f = fromEl.value, t = toEl.value;
+    if(!f || !t){ toast('حدّد تاريخ البداية والنهاية للفترة', 'danger'); return; }
+    if(f > t){ toast('تاريخ البداية يجب أن يسبق تاريخ النهاية', 'danger'); return; }
+    Period.from = f; Period.to = t; savePeriod();
+  }
   const btn = document.getElementById('syncBtn');
   if(btn){ btn.disabled = true; btn.textContent = '🔄 جارٍ المزامنة…'; }
   try{
     DB = await loadAllData();
     App.render();
-    toast('تمت مزامنة البيانات بنجاح', 'success');
+    toast(`تمت المزامنة — الفترة ${periodLabel()}`, 'success');
   }catch(err){
     toast('تعذّرت المزامنة: ' + (err.message||''), 'danger');
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '🔄 مزامنة'; }
   }
+};
+App.toggleIncludeOpen = function(){
+  Period.includeOpen = !Period.includeOpen;
+  savePeriod();
+  App.syncPeriodInputs();
+  App.syncData();
+};
+App.resetPeriod = function(){
+  const d = defaultPeriod();
+  Period.from = d.from; Period.to = d.to; savePeriod();
+  App.syncPeriodInputs();
+  App.syncData();
+};
+App.syncPeriodInputs = function(){
+  const f = document.getElementById('perFrom'), t = document.getElementById('perTo');
+  if(f) f.value = Period.from;
+  if(t) t.value = Period.to;
+  const ob = document.getElementById('perOpenBtn');
+  if(ob) ob.classList.toggle('on', !!Period.includeOpen);
 };
 /* بعد أي إجراء حسّاس (اعتماد/رفض/إقفال) على الخادم، نعيد تحميل البيانات كاملة
    بدل محاولة تعديل الحالة المحلية يدويًا — أضمن وأبسط، خصوصًا للإجراءات التي
@@ -2433,7 +2535,6 @@ function buildCustodyPrintHTML(custodyId, fileUrlMap){
     <div class="print-header">
       <div class="print-header-row">
         <div class="print-org">
-          <img src="logo.png" alt="">
           <div>
             <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
             <div class="print-sys-name">نظام إدارة العهد النقدية</div>
@@ -2555,7 +2656,6 @@ function buildTransferEntryPrintHTML(transferId){
     <div class="print-header">
       <div class="print-header-row">
         <div class="print-org">
-          <img src="logo.png" alt="">
           <div>
             <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
             <div class="print-sys-name">نظام إدارة العهد النقدية</div>
@@ -2645,7 +2745,6 @@ function buildCustodyClosureEntryPrintHTML(custodyId){
     <div class="print-header">
       <div class="print-header-row">
         <div class="print-org">
-          <img src="logo.png" alt="">
           <div>
             <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
             <div class="print-sys-name">نظام إدارة العهد النقدية</div>
@@ -3259,7 +3358,6 @@ function buildUserProfilePrintHTML(userId){
     <div class="print-header">
       <div class="print-header-row">
         <div class="print-org">
-          <img src="logo.png" alt="">
           <div>
             <div class="print-org-name">${esc(fed?fed.federation_name_ar:'—')}</div>
             <div class="print-sys-name">نظام إدارة العهد النقدية</div>
