@@ -633,6 +633,22 @@ async function computeBoardLimit(payload, trip) {
   return { flag: level === 'over' ? LIMIT_FLAG_OVER : LIMIT_FLAG_AT, note: notes.join(' — ') || null };
 }
 
+
+/* تحقق تواريخ الرحلة على الخادم: لا بداية في الماضي، ولا نهاية قبل البداية.
+   يطابق tripDatesError في secondments.html. */
+function todayISOServer() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function tripDatesProblem(start, end, allowPast) {
+  const s = start ? String(start).slice(0, 10) : '';
+  const e = end ? String(end).slice(0, 10) : '';
+  if (!s || !e) return 'تاريخ بداية الرحلة وتاريخ نهايتها إلزاميان.';
+  if (!allowPast && s < todayISOServer()) return 'لا يمكن إدخال رحلة بتاريخ بداية سابق لتاريخ اليوم.';
+  if (e < s) return 'تاريخ نهاية الرحلة لا يمكن أن يسبق تاريخ بدايتها.';
+  return null;
+}
+
 async function getRow(table, pkField, id) {
   const { data, error } = await supabase.from(table).select('*').eq(pkField, id).single();
   if (error || !data) return null;
@@ -1335,6 +1351,11 @@ app.post('/api/db', async (req, res) => {
       /* ضوابط سفر مجلس الإدارة: الخادم يعيد حساب العلامة بنفسه دائمًا ولا
          يثق بما أرسله العميل — فلا يمكن تزييف "ضمن الضوابط" لتفادي اشتراط
          اعتماد مدير اللجنة. */
+      if (table === 'trips') {
+        const problem = tripDatesProblem(cleanPayload.start_date, cleanPayload.end_date, false);
+        if (problem) return res.status(400).json({ data: null, error: { message: problem } });
+      }
+
       if (table === 'delegations') {
         const parentTrip = cleanPayload.trip_id ? await getRow('trips', 'trip_id', cleanPayload.trip_id) : null;
         if (!parentTrip) return res.status(400).json({ data: null, error: { message: 'الرحلة المرتبطة بهذا المشارك غير موجودة.' } });
@@ -1373,6 +1394,17 @@ app.post('/api/db', async (req, res) => {
       let cleanPatch = filterFields(patch, TABLE_FIELDS[table]);
       const fedField = FED_FIELD[table];
       if (fedField) delete cleanPatch[fedField]; // لا يجوز نقل سجل لاتحاد آخر عبر التحديث
+
+      if (table === 'trips' && ('start_date' in cleanPatch || 'end_date' in cleanPatch)) {
+        const existing = await getRow('trips', 'trip_id', id);
+        if (!existing) return res.status(404).json({ data: null, error: { message: 'الرحلة غير موجودة.' } });
+        const newStart = ('start_date' in cleanPatch) ? cleanPatch.start_date : existing.start_date;
+        const newEnd = ('end_date' in cleanPatch) ? cleanPatch.end_date : existing.end_date;
+        // بقاء تاريخ البداية كما هو مسموح حتى لو كان ماضيًا (رحلة قديمة)
+        const keptStart = String(newStart || '').slice(0, 10) === String(existing.start_date || '').slice(0, 10);
+        const problem = tripDatesProblem(newStart, newEnd, keptStart);
+        if (problem) return res.status(400).json({ data: null, error: { message: problem } });
+      }
 
       if (table === 'users') {
         delete cleanPatch.password; // تغيير كلمة المرور يكون فقط عبر change_password
