@@ -323,7 +323,7 @@ const checkForgotRateLimit = makeRateLimiter(8, RATE_WINDOW_MS);
    ========================================================================= */
 const TABLE_FIELDS = {
   federations: ['federation_id', 'federation_name_ar', 'federation_name_en', 'image', 'created_by', 'created_at'],
-  users: ['user_id', 'federation_id', 'user_status', 'employee_name_ar', 'employee_name_en', 'national_id', 'nationality', 'phone', 'email', 'user_name', 'password', 'user_type', 'Job_Title', 'language', 'created_at', 'created_by'],
+  users: ['user_id', 'federation_id', 'user_status', 'employee_name_ar', 'employee_name_en', 'national_id', 'nationality', 'phone', 'email', 'user_name', 'password', 'user_type', 'Job_Title', 'is_continental_member', 'language', 'created_at', 'created_by'],
   cost_centers: ['cost_center_id', 'federation_id', 'parent_cost_center_id', 'cost_center_name_ar', 'cost_center_name_en', 'created_by', 'created_at'],
   expense_types: ['account_number', 'expense_name_ar', 'expense_name_en', 'created_at', 'created_by'],
   custodies: ['custody_id', 'federation_id', 'custody_status', 'received_by_user_id', 'custody_type', 'description_ar', 'description_en', 'disbursement_location', 'cost_center_id', 'Opening_balance', 'Custody_balance', 'Closing_date', 'created_by', 'created_at', 'request_approved_by', 'request_approval_date', 'closure_approved_by', 'closure_approval_date', 'Print_Count'],
@@ -331,7 +331,7 @@ const TABLE_FIELDS = {
   custody_transfers: ['transfer_id', 'federation_id', 'transfer_status', 'user_id', 'custody_id', 'statement', 'currency', 'foreign_amount', 'exchange_rate', 'amount', 'file', 'created_at', 'created_by', 'approved_by', 'approved_at'],
   custody_budgets: ['budget_id', 'Record_Status', 'federation_id', 'custody_id', 'expense_type_id', 'cost_center_id', 'estimated_amount', 'created_by', 'created_at', 'approved_by', 'approved_at'],
   trips: ['trip_id', 'federation_number', 'trip_status', 'trip_name_ar', 'trip_name_en', 'trip_type', 'justifications', 'desired_results', 'achieved_results', 'cost_centers_id', 'start_date', 'end_date', 'trip_days_count', 'entity', 'other_notes', 'has_sports_equipment', 'is_transportation_available', 'is_accommodation_available', 'file', 'Balance_trips', 'created_by', 'created_at', 'request_approved_by', 'request_approval_date', 'closure_approved_by', 'closure_approval_date'],
-  delegations: ['delegation_id', 'trip_id', 'federation_number', 'delegations_status', 'user_type', 'user_id', 'amount_delegations', 'is_linked_to_trip', 'justification', 'delegation_days_count', 'start_date', 'end_date', 'is_transportation_available', 'is_accommodation_available', 'achieved_goal', 'hours_count', 'ticket_type', 'is_car_traveler', 'ticket_price', 'total_amount', 'file', 'created_by', 'created_at', 'request_approved_by', 'request_approval_date'],
+  delegations: ['delegation_id', 'trip_id', 'federation_number', 'delegations_status', 'user_type', 'role_task', 'limit_flag', 'limit_note', 'user_id', 'amount_delegations', 'is_linked_to_trip', 'justification', 'delegation_days_count', 'start_date', 'end_date', 'is_transportation_available', 'is_accommodation_available', 'achieved_goal', 'hours_count', 'ticket_type', 'is_car_traveler', 'ticket_price', 'total_amount', 'file', 'created_by', 'created_at', 'request_approved_by', 'request_approval_date'],
   other_expenses: ['expense_id', 'trip_id', 'federation_number', 'expense_status', 'expense_type', 'beneficiary', 'justification', 'amount', 'file', 'created_by', 'created_at', 'request_approved_by', 'request_approval_date'],
 };
 // الجداول القابلة للقراءة فقط عبر هذا المسار (يشمل العرض الآمن users_public)
@@ -348,9 +348,16 @@ const FED_FIELD = {
 const NO_WRITE_TABLES = new Set(['federations']);
 const ALLOWED_RPC = new Set(['login', 'change_password']);
 // أنواع المستخدمين الممنوعة من تسجيل الدخول إلى أي نظام (سجلات فقط، بلا وصول)
-const NO_LOGIN_USER_TYPES = new Set(['لاعب', 'حكم', 'متعاون']);
+const NO_LOGIN_USER_TYPES = new Set(['لاعب', 'مرافق لاعب', 'حكم', 'متعاون']);
 // أنواع لا يحق لها إدارة المستخدمين (إضافة حسابات جديدة) — يطابق Perm.canManageUsers في الواجهة
-const CANNOT_MANAGE_USERS_TYPES = new Set(['موظف', 'موارد بشرية', 'عضو مجلس الادارة']);
+const CANNOT_MANAGE_USERS_TYPES = new Set(['موظف', 'موارد بشرية', 'عضو مجلس الادارة', 'رئيس مجلس الادارة']);
+/* أنواع لا يعدّل بياناتها (المسمى الوظيفي/نوع المستخدم) ولا يغيّر حالة
+   حساباتها (تفعيلها) إلا مراجع اللجنة حصرًا — يطابق PROTECTED_USER_TYPES
+   في index.html و secondments.html. */
+const PROTECTED_USER_TYPES = new Set(['مدير اللجنة', 'مراجع', 'رئيس الاتحاد', 'مدير تنفيذي', 'رئيس مجلس الادارة', 'عضو مجلس الادارة']);
+/* أنواع لجنة الإشراف — نطاق رؤيتها كل الاتحادات، ولا يعيّنها إلا مدير اللجنة */
+const SUPERVISOR_TYPES = new Set(['مراجع', 'مدير اللجنة']);
+const COMMITTEE_TYPES = new Set(['مدير اللجنة', 'مراجع']);
 
 
 /* =========================================================================
@@ -496,16 +503,135 @@ class ActionError extends Error {
    يجب أن تطابق تمامًا منطق كائن Perm في index.html و secondments.html — أي تعديل هناك
    يلزمه تعديل مقابل هنا. */
 const SPerm = {
-  isAuditor: u => u && u.user_type === 'مراجع',
+  /* مدير اللجنة ومراجع اللجنة: نفس نطاق الإشراف على كل الاتحادات.
+     ينفرد مدير اللجنة بإضافة المراجعين واعتماد سفر مجلس الإدارة المتجاوز. */
+  isCommitteeManager: u => u && u.user_type === 'مدير اللجنة',
+  isAuditor: u => u && (u.user_type === 'مراجع' || u.user_type === 'مدير اللجنة'),
   isPresident: u => u && u.user_type === 'رئيس الاتحاد',
   isExec: u => u && u.user_type === 'مدير تنفيذي',
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isHR: u => u && u.user_type === 'موارد بشرية',
-  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
+  isBoardChair: u => u && u.user_type === 'رئيس مجلس الادارة',
+  // رئيس مجلس الإدارة له نفس صلاحيات عضو مجلس الإدارة تمامًا
+  isBoardMember: u => u && (u.user_type === 'عضو مجلس الادارة' || u.user_type === 'رئيس مجلس الادارة'),
   isBasicStaff: u => SPerm.isEmployee(u) || SPerm.isHR(u),
   isTopApprover: u => SPerm.isPresident(u) || SPerm.isExec(u),
 };
+
+
+/* =========================================================================
+   ضوابط سفر رئيس وأعضاء مجلس الإدارة — نسخة الخادم.
+   يجب أن تطابق تمامًا evaluateBoardTravel في secondments.html.
+   الواجهة تحسب العلامة للعرض، لكن الخادم يعيد حسابها دائمًا ويكتبها بنفسه،
+   فلا يستطيع أي عميل تزييف علامة \"ضمن الضوابط\" لتفادي اعتماد مدير اللجنة.
+   ========================================================================= */
+const BOARD_TRAVEL_LIMITS = {
+  chairMaxDaysPerTrip: 9,
+  chairMaxDaysPerYear: 30,
+  chairMaxDaysPerYearContinental: 40,
+  chairMaxTripsPerYear: 4,
+  chairMaxTripsPerYearContinental: 6,
+  memberDomesticQuota: { 'بطولة': 1, 'معسكر': 1 },
+  memberForeignTripsIfContinental: 2,
+};
+const LIMIT_FLAG_OVER = 'تجاوز';
+const LIMIT_FLAG_AT = 'عند الحد';
+
+function delegationYearOf(d, trip) {
+  const src = (d && d.start_date) || (trip && trip.start_date) || (d && d.created_at) || '';
+  return String(src).slice(0, 4);
+}
+
+/* يحسب علامة الضوابط لمشاركة جديدة. يعيد { flag, note } */
+async function computeBoardLimit(payload, trip) {
+  const empty = { flag: null, note: null };
+  if (!trip || !payload.user_id) return empty;
+  const target = await getRow('users_public', 'user_id', payload.user_id);
+  if (!target) return empty;
+  const isChair = target.user_type === 'رئيس مجلس الادارة';
+  const isMember = target.user_type === 'عضو مجلس الادارة';
+  if (!isChair && !isMember) return empty;
+
+  const L = BOARD_TRAVEL_LIMITS;
+  const fedId = trip.federation_number;
+  const year = delegationYearOf(payload, trip);
+  const cont = !!target.is_continental_member;
+  const days = Number(payload.delegation_days_count || 0);
+
+  // كل انتدابات ورحلات الاتحاد (المرفوض لا يُحتسب)
+  const allDelegations = (await getRows('delegations', { federation_number: fedId }))
+    .filter(d => d.delegations_status !== 'مرفوض');
+  const allTrips = await getRows('trips', { federation_number: fedId });
+  const tripById = id => allTrips.find(t => t.trip_id === id) || null;
+  const inYear = d => delegationYearOf(d, tripById(d.trip_id)) === year;
+
+  const notes = [];
+  let level = 'ok';
+  const mark = (lvl, note) => { notes.push(note); if (lvl === 'over') level = 'over'; else if (level !== 'over') level = 'at'; };
+
+  // ذاكرة مؤقتة لمستخدمي الاتحاد (نوع كل مشارك وعضويته القارية)
+  const memberCache = new Map();
+  for (const usr of await getRows('users_public', { federation_id: fedId })) memberCache.set(usr.user_id, usr);
+
+  const chair = Array.from(memberCache.values()).find(x => x.user_type === 'رئيس مجلس الادارة') || null;
+  const chairTripsLimit = (chair && chair.is_continental_member) ? L.chairMaxTripsPerYearContinental : L.chairMaxTripsPerYear;
+  const chairTripsUsed = () => {
+    let count = chair ? allDelegations.filter(d => d.user_id === chair.user_id && inYear(d)).length : 0;
+    // الرحلات الخارجية لأعضاء المجلس الأعضاء في اتحاد قاري تُخصم من رصيد الرئيس
+    for (const d of allDelegations) {
+      if (!inYear(d)) continue;
+      const t = tripById(d.trip_id);
+      if (!t || t.entity === 'المملكة') continue;
+      const usr = memberCache.get(d.user_id);
+      if (!usr || usr.user_type !== 'عضو مجلس الادارة' || !usr.is_continental_member) continue;
+      count++;
+    }
+    return count;
+  };
+  if (isChair) {
+    if (days > L.chairMaxDaysPerTrip) mark('over', `مدة الرحلة ${days} يومًا وتتجاوز حد ${L.chairMaxDaysPerTrip} أيام للرحلة الواحدة`);
+    else if (days === L.chairMaxDaysPerTrip) mark('at', `مدة الرحلة بلغت الحد الأعلى ${L.chairMaxDaysPerTrip} أيام للرحلة الواحدة`);
+
+    const maxDays = cont ? L.chairMaxDaysPerYearContinental : L.chairMaxDaysPerYear;
+    const usedDays = allDelegations.filter(d => d.user_id === target.user_id && inYear(d))
+      .reduce((sum, x) => sum + Number(x.delegation_days_count || 0), 0);
+    const newDays = usedDays + days;
+    if (newDays > maxDays) mark('over', `إجمالي أيام السفر يصبح ${newDays} يومًا خلال ${year} ويتجاوز الحد السنوي ${maxDays} يومًا`);
+    else if (newDays === maxDays) mark('at', `إجمالي أيام السفر يبلغ الحد السنوي ${maxDays} يومًا خلال ${year}`);
+
+    const maxTrips = cont ? L.chairMaxTripsPerYearContinental : L.chairMaxTripsPerYear;
+    const newTrips = chairTripsUsed() + 1;
+    if (newTrips > maxTrips) mark('over', `عدد الرحلات يصبح ${newTrips} خلال ${year} ويتجاوز الحد السنوي ${maxTrips} رحلات`);
+    else if (newTrips === maxTrips) mark('at', `عدد الرحلات يبلغ الحد السنوي ${maxTrips} رحلات خلال ${year}`);
+  } else {
+    const own = allDelegations.filter(d => d.user_id === target.user_id && inYear(d));
+    if (trip.entity === 'المملكة') {
+      const quota = L.memberDomesticQuota[trip.trip_type];
+      if (!quota) {
+        mark('over', `داخل المملكة يُسمح لعضو مجلس الإدارة برحلة بطولة واحدة ورحلة معسكر واحدة فقط سنويًا — ونوع هذه الرحلة \u201c${trip.trip_type || '—'}\u201d`);
+      } else {
+        const used = own.filter(x => { const t = tripById(x.trip_id); return t && t.entity === 'المملكة' && t.trip_type === trip.trip_type; }).length;
+        if (used + 1 > quota) mark('over', `سبق للعضو ${used} رحلة ${trip.trip_type} داخل المملكة خلال ${year}، والمسموح ${quota} فقط`);
+        else mark('at', `هذه رحلة ${trip.trip_type} رقم ${used + 1} من ${quota} المسموح بها داخل المملكة خلال ${year}`);
+      }
+    } else if (!cont) {
+      mark('over', 'السفر خارج المملكة غير مسموح لعضو مجلس الإدارة ما لم يكن عضوًا في اتحاد قاري');
+    } else {
+      const usedForeign = own.filter(x => { const t = tripById(x.trip_id); return t && t.entity !== 'المملكة'; }).length;
+      const newForeign = usedForeign + 1;
+      if (newForeign > L.memberForeignTripsIfContinental) mark('over', `العضو استنفد رحلتيه الخارجيتين خلال ${year} (هذه رقم ${newForeign})`);
+      else if (newForeign === L.memberForeignTripsIfContinental) mark('at', `هذه الرحلة الخارجية رقم ${newForeign} من ${L.memberForeignTripsIfContinental} المسموح بها خلال ${year}`);
+
+      const chairNew = chairTripsUsed() + 1;
+      if (chairNew > chairTripsLimit) mark('over', `تُخصم هذه الرحلة من رصيد رحلات رئيس مجلس الإدارة وقد تجاوز الرصيد (${chairNew} من ${chairTripsLimit})`);
+      else if (chairNew === chairTripsLimit) mark('at', `تُخصم من رصيد رحلات رئيس مجلس الإدارة وتبلغ به الحد السنوي (${chairNew} من ${chairTripsLimit})`);
+    }
+  }
+
+  if (level === 'ok') return empty;
+  return { flag: level === 'over' ? LIMIT_FLAG_OVER : LIMIT_FLAG_AT, note: notes.join(' — ') || null };
+}
 
 async function getRow(table, pkField, id) {
   const { data, error } = await supabase.from(table).select('*').eq(pkField, id).single();
@@ -559,6 +685,9 @@ function overrideAllows(ov, user) {
 }
 /* لو المشارك بالانتداب نفسه رئيس الاتحاد أو المدير التنفيذي، يوافق عليه الطرف الآخر حصرًا */
 function canApproveParticipantRecord(user, participant, participantUser) {
+  /* المتجاوز لضوابط سفر مجلس الإدارة: مدير اللجنة وحده يعتمد سفره */
+  if (participant && participant.limit_flag === 'تجاوز') return SPerm.isCommitteeManager(user);
+  if (SPerm.isCommitteeManager(user)) return true;
   if (!SPerm.isTopApprover(user)) return false;
   const pType = participantUser ? participantUser.user_type : participant.user_type;
   if (pType === 'رئيس الاتحاد') return SPerm.isExec(user);
@@ -710,6 +839,11 @@ const ACTIONS = {
     if (!target) throw new ActionError('المستخدم غير موجود', 404);
     if (!SPerm.isAuditor(user) && target.federation_id !== user.federation_id) throw new ActionError('المستخدم غير موجود', 404);
     if (target.user_id === user.user_id) throw new ActionError('لا يمكنك تغيير حالة حسابك أنت', 403);
+    // (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة):
+    // تفعيل حساباتهم أو تغيير حالتها من صلاحية مراجع اللجنة حصرًا.
+    if (PROTECTED_USER_TYPES.has(target.user_type) && !SPerm.isAuditor(user)) {
+      throw new ActionError('حسابات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) لا يغيّر حالتها إلا مراجع اللجنة', 403);
+    }
     await updateRow('users', 'user_id', userId, { user_status: newStatus });
     return { targetTable: 'users', targetId: userId, message: 'تم تحديث حالة المستخدم إلى: ' + newStatus };
   },
@@ -807,7 +941,8 @@ const ACTIONS = {
      هو ما إذا أُدخلت بيانات التذكرة (ticket_submitted) أم لا بعد. */
   async approveParticipant({ user }, { delegationId }) {
     const p = await getRow('delegations', 'delegation_id', delegationId);
-    if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
+    // مدير اللجنة/المراجع يشرفان على كل الاتحادات فلا يقيَّدان باتحادهما
+    if (!p || (!SPerm.isAuditor(user) && p.federation_number !== user.federation_id)) throw new ActionError('المشارك غير موجود', 404);
     const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
     if (!canApproveParticipantRecord(user, p, pUser)) throw new ActionError('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)', 403);
     if (p.delegations_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المشارك بالفعل', 400);
@@ -818,7 +953,8 @@ const ACTIONS = {
 
   async rejectParticipant({ user }, { delegationId }) {
     const p = await getRow('delegations', 'delegation_id', delegationId);
-    if (!p || p.federation_number !== user.federation_id) throw new ActionError('المشارك غير موجود', 404);
+    // مدير اللجنة/المراجع يشرفان على كل الاتحادات فلا يقيَّدان باتحادهما
+    if (!p || (!SPerm.isAuditor(user) && p.federation_number !== user.federation_id)) throw new ActionError('المشارك غير موجود', 404);
     const pUser = p.user_id ? await getRow('users_public', 'user_id', p.user_id) : null;
     if (!canApproveParticipantRecord(user, p, pUser)) throw new ActionError('لا تملك صلاحية الرفض', 403);
     if (p.delegations_status !== 'غير معتمد') throw new ActionError('تمت معالجة هذا المشارك بالفعل', 400);
@@ -930,7 +1066,7 @@ app.post('/api/user-credentials/resend', async (req, res) => {
       return res.status(403).json({ data: null, error: { message: 'هذا المستخدم لا يتبع اتحادك.' } });
     }
     if (NO_LOGIN_USER_TYPES.has(target.user_type)) {
-      return res.status(400).json({ data: null, error: { message: 'هذا النوع من المستخدمين (لاعب/حكم/متعاون) لا يملك حق الدخول للنظام أصلاً — لا تُرسل له بيانات دخول.' } });
+      return res.status(400).json({ data: null, error: { message: 'هذا النوع من المستخدمين (لاعب/مرافق لاعب/حكم/متعاون) لا يملك حق الدخول للنظام أصلاً — لا تُرسل له بيانات دخول.' } });
     }
     if (!target.email) return res.status(400).json({ data: null, error: { message: 'لا يوجد بريد إلكتروني مسجَّل على هذا الحساب.' } });
 
@@ -1125,7 +1261,8 @@ app.post('/api/db', async (req, res) => {
   if (!currentUser) {
     return res.status(401).json({ data: null, error: { message: 'انتهت الجلسة أو غير صالحة. الرجاء تسجيل الدخول من جديد.', code: 'AUTH_REQUIRED' } });
   }
-  const isAuditor = currentUser.user_type === 'مراجع';
+  const isAuditor = SUPERVISOR_TYPES.has(currentUser.user_type);
+  const isCommitteeManager = currentUser.user_type === 'مدير اللجنة';
 
   try {
     let query;
@@ -1177,6 +1314,11 @@ app.post('/api/db', async (req, res) => {
         if (hashErr) return res.status(500).json({ data: null, error: { message: 'تعذّر تجهيز كلمة المرور.' } });
         cleanPayload.password = hashed;
         if (!isAuditor) cleanPayload.federation_id = currentUser.federation_id;
+        if (COMMITTEE_TYPES.has(cleanPayload.user_type) && !isCommitteeManager) {
+          return res.status(403).json({ data: null, error: { message: 'إضافة حسابات لجنة الإشراف (مدير اللجنة / مراجع) من صلاحية مدير اللجنة حصرًا.' } });
+        }
+        // سؤال الاتحاد القاري خاص برئيس وأعضاء مجلس الإدارة فقط
+        if (cleanPayload.user_type !== 'رئيس مجلس الادارة' && cleanPayload.user_type !== 'عضو مجلس الادارة') cleanPayload.is_continental_member = false;
         newUserInfo = {
           email: cleanPayload.email,
           name: cleanPayload.employee_name_ar || cleanPayload.employee_name_en || '',
@@ -1188,6 +1330,28 @@ app.post('/api/db', async (req, res) => {
       } else {
         const fedField = FED_FIELD[table];
         if (fedField && !isAuditor) cleanPayload[fedField] = currentUser.federation_id;
+      }
+
+      /* ضوابط سفر مجلس الإدارة: الخادم يعيد حساب العلامة بنفسه دائمًا ولا
+         يثق بما أرسله العميل — فلا يمكن تزييف "ضمن الضوابط" لتفادي اشتراط
+         اعتماد مدير اللجنة. */
+      if (table === 'delegations') {
+        const parentTrip = cleanPayload.trip_id ? await getRow('trips', 'trip_id', cleanPayload.trip_id) : null;
+        if (!parentTrip) return res.status(400).json({ data: null, error: { message: 'الرحلة المرتبطة بهذا المشارك غير موجودة.' } });
+        if (!isAuditor && parentTrip.federation_number !== currentUser.federation_id) {
+          return res.status(403).json({ data: null, error: { message: 'الرحلة لا تتبع اتحادك.' } });
+        }
+        if (!cleanPayload.role_task || !String(cleanPayload.role_task).trim()) {
+          return res.status(400).json({ data: null, error: { message: 'المهمة أو الدور في الرحلة إلزامية لكل مشارك.' } });
+        }
+        try {
+          const lim = await computeBoardLimit(cleanPayload, parentTrip);
+          cleanPayload.limit_flag = lim.flag;
+          cleanPayload.limit_note = lim.note;
+        } catch (e) {
+          console.error('تعذّر حساب ضوابط سفر مجلس الإدارة:', e && e.message);
+          return res.status(500).json({ data: null, error: { message: 'تعذّر التحقق من ضوابط سفر مجلس الإدارة.' } });
+        }
       }
       if (TABLE_FIELDS[table].includes('created_by')) {
         cleanPayload.created_by = currentUser.user_id;
@@ -1212,6 +1376,27 @@ app.post('/api/db', async (req, res) => {
 
       if (table === 'users') {
         delete cleanPatch.password; // تغيير كلمة المرور يكون فقط عبر change_password
+        delete cleanPatch.user_status; // تغيير الحالة يمر حصرًا عبر /api/action
+        /* الأنواع القيادية (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة /
+           عضو مجلس الإدارة): لا يعدّل بياناتها — ومنها المسمى الوظيفي ونوع
+           المستخدم — إلا مراجع اللجنة. ولا يرفّع أحدٌ مستخدمًا عاديًا إلى أحد
+           هذه الأنواع إلا هو. التحقق هنا على الخادم، فلا يفيد تجاوز الواجهة. */
+        const targetUser = await getRow('users_public', 'user_id', id);
+        if (!targetUser) return res.status(404).json({ data: null, error: { message: 'المستخدم غير موجود.' } });
+        if (!isAuditor) {
+          if (PROTECTED_USER_TYPES.has(targetUser.user_type)) {
+            return res.status(403).json({ data: null, error: { message: 'بيانات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) — ومنها المسمى الوظيفي — لا يعدّلها إلا مراجع اللجنة.' } });
+          }
+          if (cleanPatch.user_type && PROTECTED_USER_TYPES.has(cleanPatch.user_type) && cleanPatch.user_type !== targetUser.user_type) {
+            return res.status(403).json({ data: null, error: { message: 'تعيين نوع المستخدم إلى (رئيس الاتحاد / مدير تنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) من صلاحية مراجع اللجنة فقط.' } });
+          }
+        }
+        if (cleanPatch.user_type && COMMITTEE_TYPES.has(cleanPatch.user_type) && cleanPatch.user_type !== targetUser.user_type && !isCommitteeManager) {
+          return res.status(403).json({ data: null, error: { message: 'تعيين نوع المستخدم إلى (مدير اللجنة / مراجع) من صلاحية مدير اللجنة حصرًا.' } });
+        }
+        // سؤال "عضو في اتحاد قاري" خاص برئيس وأعضاء مجلس الإدارة فقط
+        const finalType = cleanPatch.user_type || targetUser.user_type;
+        if (finalType !== 'رئيس مجلس الادارة' && finalType !== 'عضو مجلس الادارة') cleanPatch.is_continental_member = false;
       }
 
       query = supabase.from(table).update(cleanPatch).eq(pkField, id);

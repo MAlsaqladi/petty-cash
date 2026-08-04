@@ -36,6 +36,8 @@ create table if not exists users (
   password            text not null,
   user_type           text not null,
   "Job_Title"         text,
+  -- هل رئيس مجلس الإدارة عضو في اتحاد قاري؟ (يُسأل عنه لنوع "رئيس مجلس الادارة" فقط)
+  is_continental_member boolean not null default false,
   language            text default 'ar',
   created_at          timestamptz default now(),
   created_by          text
@@ -149,7 +151,7 @@ create index if not exists idx_cc_parent on cost_centers(parent_cost_center_id);
 create or replace view users_public as
   select user_id, federation_id, user_status, employee_name_ar, employee_name_en,
          national_id, nationality, phone, email, user_name, user_type,
-         "Job_Title", language, created_at, created_by
+         "Job_Title", language, created_at, created_by, is_continental_member
   from users;
 
 -- دالة مساعدة يستخدمها الخادم (server.js) لتشفير كلمة مرور جديدة عند إنشاء مستخدم
@@ -170,7 +172,7 @@ begin
   return query
     select u.user_id, u.federation_id, u.user_status, u.employee_name_ar, u.employee_name_en,
            u.national_id, u.nationality, u.phone, u.email, u.user_name, u.user_type,
-           u."Job_Title", u.language, u.created_at, u.created_by
+           u."Job_Title", u.language, u.created_at, u.created_by, u.is_continental_member
     from users u
     where u.user_name = p_username and u.password = crypt(p_password, u.password);
 end;
@@ -274,6 +276,8 @@ create table if not exists delegations (
   federation_number              text references federations(federation_id),
   delegations_status             text not null default 'غير معتمد',
   user_type                      text,
+  -- المهمة أو الدور في الرحلة — إلزامي لكل مشارك من الواجهة
+  role_task                      text,
   user_id                        text references users(user_id),
   amount_delegations             numeric default 0,
   is_linked_to_trip              boolean default true,

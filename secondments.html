@@ -16,6 +16,9 @@
 .period-sep{opacity:.5;font-size:12px;}
 .period-input{font-family:inherit;font-size:12.5px;padding:5px 8px;border-radius:8px;border:1px solid var(--border,#d9ddd6);background:var(--card,#fff);color:inherit;min-width:132px;}
 .period-input:focus{outline:none;border-color:var(--primary,#2f6f4e);}
+/* أرقام الفلتر (السنة والتواريخ) تُعرض بالأرقام الإنجليزية اللاتينية دائمًا */
+.period-input,.period-year{font-variant-numeric:lining-nums tabular-nums;font-feature-settings:'lnum' 1,'tnum' 1;}
+.period-year{min-width:92px;text-align:center;font-weight:700;}
 .period-note{font-size:11.5px;opacity:.7;}
 @media (max-width:760px){
   .topbar{flex-wrap:wrap;row-gap:8px;}
@@ -65,12 +68,14 @@
         </div>
       </div>
       <div class="period-bar">
+        <span class="period-lbl">العام</span>
+        <select id="perYear" class="period-input period-year" lang="en" dir="ltr" aria-label="السنة" onchange="App.setPeriodYear(this.value)"></select>
         <span class="period-lbl">الفترة</span>
-        <input type="date" lang="en-GB" id="perFrom" class="period-input" aria-label="من تاريخ">
+        <input type="date" lang="en-GB" dir="ltr" id="perFrom" class="period-input" aria-label="من تاريخ">
         <span class="period-sep">←</span>
-        <input type="date" lang="en-GB" id="perTo" class="period-input" aria-label="إلى تاريخ">
+        <input type="date" lang="en-GB" dir="ltr" id="perTo" class="period-input" aria-label="إلى تاريخ">
         <button class="btn btn-outline btn-sm" id="perOpenBtn" onclick="App.toggleIncludeOpen()" title="إظهار كل الرحلات غير المغلقة حتى لو كانت من فترات سابقة">🔓 الرحلات المفتوحة</button>
-        <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="آخر سنة">آخر سنة</button>
+        <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="السنة الحالية كاملة من 1/1 إلى 31/12">السنة الحالية</button>
         <button class="btn btn-primary btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
       </div>
     </div>
@@ -91,17 +96,27 @@
 
 const SCHEMA = {
   federations: ['federation_id','federation_name_ar','federation_name_en','image','created_by','created_at'],
-  users: ['user_id','federation_id','user_status','employee_name_ar','employee_name_en','national_id','nationality','phone','email','user_name','password','user_type','Job_Title','language','created_at','created_by'],
+  users: ['user_id','federation_id','user_status','employee_name_ar','employee_name_en','national_id','nationality','phone','email','user_name','password','user_type','Job_Title','is_continental_member','language','created_at','created_by'],
   cost_centers: ['cost_center_id','federation_id','parent_cost_center_id','cost_center_name_ar','cost_center_name_en','created_by','created_at'],
   expense_types: ['account_number','expense_name_ar','expense_name_en','created_at','created_by'],
   trips: ['trip_id','federation_number','trip_status','trip_name_ar','trip_name_en','trip_type','justifications','desired_results','achieved_results','cost_centers_id','start_date','end_date','trip_days_count','entity','other_notes','has_sports_equipment','is_transportation_available','is_accommodation_available','file','Balance_trips','created_by','created_at','request_approved_by','request_approval_date','closure_approved_by','closure_approval_date'],
-  delegations: ['delegation_id','trip_id','federation_number','delegations_status','user_type','user_id','amount_delegations','is_linked_to_trip','justification','delegation_days_count','start_date','end_date','is_transportation_available','is_accommodation_available','achieved_goal','hours_count','ticket_type','is_car_traveler','ticket_price','total_amount','file','created_by','created_at','request_approved_by','request_approval_date'],
+  delegations: ['delegation_id','trip_id','federation_number','delegations_status','user_type','role_task','limit_flag','limit_note','user_id','amount_delegations','is_linked_to_trip','justification','delegation_days_count','start_date','end_date','is_transportation_available','is_accommodation_available','achieved_goal','hours_count','ticket_type','is_car_traveler','ticket_price','total_amount','file','created_by','created_at','request_approved_by','request_approval_date'],
   other_expenses: ['expense_id','trip_id','federation_number','expense_status','expense_type','beneficiary','justification','amount','file','created_by','created_at','request_approved_by','request_approval_date']
 };
 const PK = {federations:'federation_id',users:'user_id',cost_centers:'cost_center_id',expense_types:'account_number',trips:'trip_id',delegations:'delegation_id',other_expenses:'expense_id'};
 
-const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','عضو مجلس الادارة','لاعب','حكم','متعاون'];
-const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
+const USER_TYPES = ['مدير اللجنة','مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','رئيس مجلس الادارة','عضو مجلس الادارة','لاعب','مرافق لاعب','حكم','متعاون'];
+/* أنواع لا تُعدَّل بياناتها (ومنها المسمى الوظيفي ونوع المستخدم) ولا تُفعَّل
+   حساباتها (جعلها "مفتوح") إلا من مراجع اللجنة أو مدير اللجنة حصرًا. */
+const PROTECTED_USER_TYPES = ['مدير اللجنة','مراجع','رئيس الاتحاد','مدير تنفيذي','رئيس مجلس الادارة','عضو مجلس الادارة'];
+function isProtectedType(t){ return PROTECTED_USER_TYPES.includes(t); }
+/* أنواع لجنة الإشراف — لا يعيّنها إلا مدير اللجنة نفسه (هو وحده من يضيف مراجعين) */
+const COMMITTEE_TYPES = ['مدير اللجنة','مراجع'];
+/* الأنواع التي يظهر معها سؤال "عضو في اتحاد قاري؟" */
+const CONTINENTAL_QUESTION_TYPES = ['رئيس مجلس الادارة','عضو مجلس الادارة'];
+function asksContinental(t){ return CONTINENTAL_QUESTION_TYPES.includes(t); }
+// "مرافق لاعب" له نفس معاملة اللاعب تمامًا: سجل فقط بلا حق دخول للنظام.
+const NO_LOGIN_USER_TYPES = ['لاعب','مرافق لاعب','حكم','متعاون'];
 const USER_STATUSES = ['مفتوح','مغلق','تحت المعالجة','مسودة'];
 const TRIP_STATUSES = ['طلب','قيد الصرف','مغلقة','مرفوضة'];
 const TRIP_STATUS_LABELS = {
@@ -130,9 +145,223 @@ const DAILY_ALLOWANCE_TABLE = {
 function allowanceTier(userType){
   if(userType==='رئيس الاتحاد') return 'رئيس';
   if(userType==='مدير تنفيذي') return 'مدير';
-  if(userType==='لاعب') return 'لاعب';
-  return 'إداري'; // محاسب / موظف / موارد بشرية / حكم / متعاون / عضو مجلس الإدارة / مراجع
+  if(userType==='لاعب' || userType==='مرافق لاعب') return 'لاعب'; // المرافق يعامل كاللاعب
+  return 'إداري'; // محاسب / موظف / موارد بشرية / حكم / متعاون / رئيس وعضو مجلس الإدارة / مراجع
 }
+
+/* =========================================================================
+   ضوابط سفر رئيس وأعضاء مجلس الإدارة
+   -------------------------------------------------------------------------
+   رئيس مجلس الإدارة:
+     • 9 أيام كحد أعلى للرحلة الواحدة.
+     • 30 يومًا في السنة (40 يومًا إن كان عضوًا في اتحاد قاري).
+     • 4 رحلات في السنة (6 رحلات إن كان عضوًا في اتحاد قاري).
+   عضو مجلس الإدارة:
+     • داخل المملكة: رحلتان فقط سنويًا — واحدة لحضور بطولة وواحدة لحضور معسكر.
+     • إن كان عضوًا في اتحاد قاري: رحلتان إضافيتان خارج المملكة، وتُخصمان من
+       رصيد رحلات رئيس مجلس الإدارة.
+   من يتجاوز الضوابط لا يُمنع من الإدراج ضمن المشاركين، بل يُدرج وعليه علامة
+   حمراء وملاحظة، ولا يعتمد سفره إلا مدير اللجنة. ومن بلغ حدّه ووقف عنده
+   تكون علامته صفراء.
+   السنة المعتمدة هي السنة الميلادية (1/1 → 31/12) حسب تاريخ بداية الرحلة.
+   ========================================================================= */
+const BOARD_TRAVEL_LIMITS = {
+  chairMaxDaysPerTrip: 9,
+  chairMaxDaysPerYear: 30,
+  chairMaxDaysPerYearContinental: 40,
+  chairMaxTripsPerYear: 4,
+  chairMaxTripsPerYearContinental: 6,
+  memberDomesticQuota: { 'بطولة': 1, 'معسكر': 1 },
+  memberForeignTripsIfContinental: 2,
+};
+const LIMIT_FLAG_OVER = 'تجاوز';
+const LIMIT_FLAG_AT   = 'عند الحد';
+
+function isBoardChairType(t){ return t === 'رئيس مجلس الادارة'; }
+function isBoardMemberType(t){ return t === 'عضو مجلس الادارة'; }
+function tripOfDelegation(d){ return (DB.trips||[]).find(t => t.trip_id === d.trip_id) || null; }
+/* السنة المعتمدة للانتداب: تاريخ بدايته، وإن غاب فتاريخ بداية الرحلة، وإلا تاريخ إنشائه */
+function delegationYear(d, trip){
+  const src = (d && d.start_date) || (trip && trip.start_date) || (d && d.created_at) || '';
+  return String(src).slice(0, 4);
+}
+/* الانتدابات المحتسَبة: كل ما لم يُرفَض */
+function countedDelegations(){ return (DB.delegations||[]).filter(d => d.delegations_status !== 'مرفوض'); }
+function delegationsOfUserInYear(userId, year, excludeId){
+  return countedDelegations().filter(d =>
+    d.user_id === userId && d.delegation_id !== excludeId && delegationYear(d, tripOfDelegation(d)) === year);
+}
+function boardChairOf(fedId){
+  return (DB.users||[]).find(x => x.federation_id === fedId && isBoardChairType(x.user_type)) || null;
+}
+function chairTripsLimit(chair){
+  const L = BOARD_TRAVEL_LIMITS;
+  return (chair && chair.is_continental_member) ? L.chairMaxTripsPerYearContinental : L.chairMaxTripsPerYear;
+}
+/* رصيد رحلات رئيس مجلس الإدارة المستهلَك = رحلاته هو + الرحلات الخارجية
+   لأعضاء المجلس الأعضاء في اتحاد قاري (فهي تُخصم من رصيده) */
+function chairTripsUsed(fedId, year, excludeId){
+  const chair = boardChairOf(fedId);
+  let count = chair ? delegationsOfUserInYear(chair.user_id, year, excludeId).length : 0;
+  countedDelegations().forEach(d => {
+    if(d.delegation_id === excludeId) return;
+    const t = tripOfDelegation(d);
+    if(!t || t.federation_number !== fedId) return;
+    if(delegationYear(d, t) !== year) return;
+    if(t.entity === 'المملكة') return;
+    const usr = userById(d.user_id);
+    if(!usr || !isBoardMemberType(usr.user_type) || !usr.is_continental_member) return;
+    count++;
+  });
+  return count;
+}
+
+/* التقييم الأساسي: يُرجع { level:'ok'|'at'|'over', notes:[..] } لمشاركة مقترحة أو قائمة */
+function evaluateBoardTravel(opts){
+  const res = { level:'ok', notes:[] };
+  const user = opts.user;
+  if(!user) return res;
+  const isChair = isBoardChairType(user.user_type);
+  const isMember = isBoardMemberType(user.user_type);
+  if(!isChair && !isMember) return res;
+
+  const L = BOARD_TRAVEL_LIMITS;
+  const cont = !!user.is_continental_member;
+  const year = opts.year || String(new Date().getFullYear());
+  const fedId = opts.federationId;
+  const excludeId = opts.excludeId || null;
+  const days = Number(opts.days || 0);
+  const entity = opts.entity;
+  const tripType = opts.tripType;
+  const mark = (lvl, note) => {
+    res.notes.push(note);
+    if(lvl === 'over') res.level = 'over';
+    else if(res.level !== 'over') res.level = 'at';
+  };
+
+  if(isChair){
+    if(days > L.chairMaxDaysPerTrip) mark('over', `مدة الرحلة ${days} يومًا وتتجاوز حد ${L.chairMaxDaysPerTrip} أيام للرحلة الواحدة`);
+    else if(days === L.chairMaxDaysPerTrip) mark('at', `مدة الرحلة بلغت الحد الأعلى ${L.chairMaxDaysPerTrip} أيام للرحلة الواحدة`);
+
+    const maxDays = cont ? L.chairMaxDaysPerYearContinental : L.chairMaxDaysPerYear;
+    const usedDays = delegationsOfUserInYear(user.user_id, year, excludeId)
+      .reduce((sum, x) => sum + Number(x.delegation_days_count || 0), 0);
+    const newDays = usedDays + days;
+    if(newDays > maxDays) mark('over', `إجمالي أيام السفر يصبح ${newDays} يومًا خلال ${year} ويتجاوز الحد السنوي ${maxDays} يومًا`);
+    else if(newDays === maxDays) mark('at', `إجمالي أيام السفر يبلغ الحد السنوي ${maxDays} يومًا خلال ${year}`);
+
+    const maxTrips = chairTripsLimit(user);
+    const newTrips = chairTripsUsed(fedId, year, excludeId) + 1;
+    if(newTrips > maxTrips) mark('over', `عدد الرحلات يصبح ${newTrips} خلال ${year} ويتجاوز الحد السنوي ${maxTrips} رحلات`);
+    else if(newTrips === maxTrips) mark('at', `عدد الرحلات يبلغ الحد السنوي ${maxTrips} رحلات خلال ${year}`);
+    return res;
+  }
+
+  /* عضو مجلس الإدارة */
+  const own = delegationsOfUserInYear(user.user_id, year, excludeId);
+  if(entity === 'المملكة'){
+    const quota = L.memberDomesticQuota[tripType];
+    if(!quota){
+      mark('over', `داخل المملكة يُسمح لعضو مجلس الإدارة برحلة بطولة واحدة ورحلة معسكر واحدة فقط سنويًا — ونوع هذه الرحلة \u201c${tripType || '—'}\u201d`);
+      return res;
+    }
+    const used = own.filter(x => { const t = tripOfDelegation(x); return t && t.entity === 'المملكة' && t.trip_type === tripType; }).length;
+    if(used + 1 > quota) mark('over', `سبق للعضو ${used} رحلة ${tripType} داخل المملكة خلال ${year}، والمسموح ${quota} فقط`);
+    else mark('at', `هذه رحلة ${tripType} رقم ${used + 1} من ${quota} المسموح بها داخل المملكة خلال ${year}`);
+    return res;
+  }
+
+  if(!cont){
+    mark('over', 'السفر خارج المملكة غير مسموح لعضو مجلس الإدارة ما لم يكن عضوًا في اتحاد قاري');
+    return res;
+  }
+  const usedForeign = own.filter(x => { const t = tripOfDelegation(x); return t && t.entity !== 'المملكة'; }).length;
+  const newForeign = usedForeign + 1;
+  if(newForeign > L.memberForeignTripsIfContinental) mark('over', `العضو استنفد رحلتيه الخارجيتين خلال ${year} (هذه رقم ${newForeign})`);
+  else if(newForeign === L.memberForeignTripsIfContinental) mark('at', `هذه الرحلة الخارجية رقم ${newForeign} من ${L.memberForeignTripsIfContinental} المسموح بها خلال ${year}`);
+
+  const chair = boardChairOf(fedId);
+  const chairMax = chairTripsLimit(chair);
+  const chairNew = chairTripsUsed(fedId, year, excludeId) + 1;
+  if(chairNew > chairMax) mark('over', `تُخصم هذه الرحلة من رصيد رحلات رئيس مجلس الإدارة وقد تجاوز الرصيد (${chairNew} من ${chairMax})`);
+  else if(chairNew === chairMax) mark('at', `تُخصم من رصيد رحلات رئيس مجلس الإدارة وتبلغ به الحد السنوي (${chairNew} من ${chairMax})`);
+  return res;
+}
+
+/* تقييم مشاركة مقترحة من نموذج الإضافة */
+function evaluateParticipantDraft(draft, trip){
+  const target = userById(draft.user_id);
+  if(!target) return { level:'ok', notes:[] };
+  const days = draft.is_linked_to_trip ? sourceDaysCount(trip) : sourceDaysCount(draft);
+  const startDate = (draft.is_linked_to_trip ? trip.start_date : draft.start_date) || trip.start_date || '';
+  return evaluateBoardTravel({
+    user: target, entity: trip.entity, tripType: trip.trip_type, days: days,
+    federationId: trip.federation_number, year: String(startDate).slice(0,4) || String(new Date().getFullYear()),
+  });
+}
+/* إعادة تقييم مشارك محفوظ (للعرض في الجداول) — نستثني سجله نفسه من الحساب */
+function evaluateSavedParticipant(d){
+  const t = tripOfDelegation(d);
+  const target = userById(d.user_id);
+  if(!t || !target) return { level:'ok', notes:[] };
+  return evaluateBoardTravel({
+    user: target, entity: t.entity, tripType: t.trip_type, days: Number(d.delegation_days_count || 0),
+    federationId: t.federation_number, year: delegationYear(d, t), excludeId: d.delegation_id,
+  });
+}
+function limitFlagOf(evalRes){
+  if(!evalRes || evalRes.level === 'ok') return null;
+  return evalRes.level === 'over' ? LIMIT_FLAG_OVER : LIMIT_FLAG_AT;
+}
+/* شارة ملوّنة: أحمر = تجاوز، أصفر = بلغ حدّه ووقف */
+function limitBadge(flag, note){
+  if(!flag) return '';
+  const title = note ? ` title="${esc(note)}"` : '';
+  return flag === LIMIT_FLAG_OVER
+    ? `<span class="badge badge-danger"${title}>🔴 تجاوز الضوابط</span>`
+    : `<span class="badge badge-warning"${title}>🟡 بلغ الحد</span>`;
+}
+/* حالة المستخدم السنوية (لتلوينه في القوائم) — أحمر إن تجاوز، أصفر إن استنفد */
+function boardUsageStatus(user, year){
+  const out = { level:'ok', notes:[] };
+  if(!user) return out;
+  const isChair = isBoardChairType(user.user_type);
+  const isMember = isBoardMemberType(user.user_type);
+  if(!isChair && !isMember) return out;
+  year = year || String(new Date().getFullYear());
+  const L = BOARD_TRAVEL_LIMITS;
+  const own = delegationsOfUserInYear(user.user_id, year, null);
+  const mark = (lvl, note) => { out.notes.push(note); if(lvl==='over') out.level='over'; else if(out.level!=='over') out.level='at'; };
+
+  if(isChair){
+    const maxDays = user.is_continental_member ? L.chairMaxDaysPerYearContinental : L.chairMaxDaysPerYear;
+    const usedDays = own.reduce((s,x)=>s+Number(x.delegation_days_count||0),0);
+    if(usedDays > maxDays) mark('over', `استهلك ${usedDays} يومًا من ${maxDays} خلال ${year}`);
+    else if(usedDays === maxDays) mark('at', `استنفد أيام السفر (${usedDays} من ${maxDays}) خلال ${year}`);
+    if(own.some(x => Number(x.delegation_days_count||0) > L.chairMaxDaysPerTrip)) mark('over', `توجد رحلة تجاوزت ${L.chairMaxDaysPerTrip} أيام`);
+    const maxTrips = chairTripsLimit(user);
+    const usedTrips = chairTripsUsed(user.federation_id, year, null);
+    if(usedTrips > maxTrips) mark('over', `عدد الرحلات ${usedTrips} من ${maxTrips} خلال ${year}`);
+    else if(usedTrips === maxTrips) mark('at', `استنفد رحلاته السنوية (${usedTrips} من ${maxTrips}) خلال ${year}`);
+    return out;
+  }
+
+  Object.keys(L.memberDomesticQuota).forEach(tt => {
+    const quota = L.memberDomesticQuota[tt];
+    const used = own.filter(x => { const t = tripOfDelegation(x); return t && t.entity === 'المملكة' && t.trip_type === tt; }).length;
+    if(used > quota) mark('over', `رحلات ${tt} داخل المملكة ${used} من ${quota} خلال ${year}`);
+    else if(used === quota) mark('at', `استنفد رحلة ${tt} داخل المملكة خلال ${year}`);
+  });
+  const otherDomestic = own.filter(x => { const t = tripOfDelegation(x); return t && t.entity === 'المملكة' && !L.memberDomesticQuota[t.trip_type]; }).length;
+  if(otherDomestic) mark('over', `${otherDomestic} رحلة داخل المملكة بنوع غير مسموح (المسموح: بطولة ومعسكر فقط)`);
+  const usedForeign = own.filter(x => { const t = tripOfDelegation(x); return t && t.entity !== 'المملكة'; }).length;
+  if(!user.is_continental_member){
+    if(usedForeign) mark('over', `${usedForeign} رحلة خارج المملكة وهو غير عضو في اتحاد قاري`);
+  } else if(usedForeign > L.memberForeignTripsIfContinental) mark('over', `رحلات خارج المملكة ${usedForeign} من ${L.memberForeignTripsIfContinental} خلال ${year}`);
+  else if(usedForeign === L.memberForeignTripsIfContinental) mark('at', `استنفد رحلتيه الخارجيتين خلال ${year}`);
+  return out;
+}
+
 /* نسبة الخصم من البدل اليومي حسب توفير الاتحاد للنقل و/أو السكن */
 function allowanceReductionFactor(transport, accommodation){
   if(transport && accommodation) return 0.20; // خصم 80%
@@ -273,12 +502,10 @@ function readSource(table){ return READ_SOURCE[table] || table; }
    ========================================================================= */
 const PERIOD_KEY = 'secondments_period_v1';
 function todayISO(){ const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10); }
-function defaultPeriod(){
-  const to = new Date();
-  const from = new Date(to.getFullYear()-1, to.getMonth(), to.getDate());
-  const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
-  return { from: iso(from), to: iso(to), includeOpen: true };
-}
+/* الفترة الافتراضية = السنة الميلادية الحالية كاملة: من 1/1 إلى 31/12،
+   وليست "سنة رجوعًا من تاريخ اليوم". كل سنة تبدأ من 1 يناير. */
+function yearPeriod(y){ return { from: y + '-01-01', to: y + '-12-31', includeOpen: true }; }
+function defaultPeriod(){ return yearPeriod(new Date().getFullYear()); }
 let Period = (function(){
   try{
     const saved = JSON.parse(localStorage.getItem(PERIOD_KEY) || 'null');
@@ -287,6 +514,21 @@ let Period = (function(){
   return defaultPeriod();
 })();
 function savePeriod(){ try{ localStorage.setItem(PERIOD_KEY, JSON.stringify(Period)); }catch(e){} }
+/* قائمة السنوات المتاحة في الفلتر — تُعرض بأرقام إنجليزية (لاتينية) دائمًا */
+function periodYearOptions(){
+  const cur = new Date().getFullYear();
+  const out = [];
+  for(let y = cur + 1; y >= cur - 6; y--) out.push(y);
+  return out;
+}
+/* السنة المختارة حاليًا إن كانت الفترة تغطي سنة ميلادية كاملة (1/1 → 31/12) */
+function currentPeriodYear(){
+  if(/^\d{4}-01-01$/.test(Period.from||'') && Period.to === Period.from.slice(0,4) + '-12-31'){
+    return Number(Period.from.slice(0,4));
+  }
+  return null;
+}
+
 function periodLabel(){ return `${Period.from} ← ${Period.to}` + (Period.includeOpen ? ' + الرحلات المفتوحة' : ''); }
 /* الحالات التي تُعتبر "رحلة مفتوحة/غير مغلقة" */
 const OPEN_TRIP_STATUSES = ['طلب','قيد الصرف'];
@@ -401,22 +643,47 @@ function attachBtnHTML(filePath){
 
 /* ---------------------------- Permissions ---------------------------- */
 const Perm = {
-  isAuditor: u => u && u.user_type === 'مراجع',
+  /* مدير اللجنة ومراجع اللجنة كلاهما مشرف على كل الاتحادات (نفس نطاق الرؤية).
+     ما ينفرد به مدير اللجنة: إضافة المراجعين، واعتماد سفر مجلس الإدارة
+     المتجاوز للضوابط. */
+  isCommitteeManager: u => u && u.user_type === 'مدير اللجنة',
+  isAuditor: u => u && (u.user_type === 'مراجع' || u.user_type === 'مدير اللجنة'),
+  isReviewer: u => u && u.user_type === 'مراجع',
   isPresident: u => u && u.user_type === 'رئيس الاتحاد',
   isExec: u => u && u.user_type === 'مدير تنفيذي',
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isHR: u => u && u.user_type === 'موارد بشرية',
-  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
+  // رئيس مجلس الإدارة له نفس صلاحيات عضو مجلس الإدارة تمامًا
+  isBoardChair: u => u && u.user_type === 'رئيس مجلس الادارة',
+  isBoardMember: u => u && (u.user_type === 'عضو مجلس الادارة' || u.user_type === 'رئيس مجلس الادارة'),
+  // مرافق اللاعب له نفس معاملة اللاعب تمامًا
+  isPlayerCompanion: u => u && u.user_type === 'مرافق لاعب',
   isBasicStaff: u => Perm.isEmployee(u) || Perm.isHR(u),
   isTopApprover: u => Perm.isPresident(u) || Perm.isExec(u),
   canManageUsers: u => !Perm.isBasicStaff(u) && !Perm.isBoardMember(u),
   // المراجع مشرف على كل الاتحادات فيغيّر حالة أي مستخدم؛ رئيس الاتحاد
   // والمدير التنفيذي داخل اتحادهم فقط. ولا أحد يغيّر حالة حسابه هو.
   canChangeUserStatus: u => Perm.isTopApprover(u) || Perm.isAuditor(u),
-  canChangeUserStatusFor: (u,target) => target && target.user_id!==u.user_id &&
-    (Perm.isAuditor(u) ? true : (Perm.isTopApprover(u) && target.federation_id===u.federation_id)),
-  canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
+  /* حسابات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس
+     الإدارة) لا يفتحها ولا يغلقها إلا مراجع اللجنة — لا رئيس الاتحاد ولا
+     المدير التنفيذي. */
+  canChangeUserStatusFor: (u,target) => {
+    if(!target || target.user_id===u.user_id) return false;
+    if(Perm.isAuditor(u)) return true;
+    if(isProtectedType(target.user_type)) return false;
+    return Perm.isTopApprover(u) && target.federation_id===u.federation_id;
+  },
+  /* بيانات الأنواع المحمية (ومنها المسمى الوظيفي ونوع المستخدم) لا يعدّلها
+     إلا مراجع اللجنة، وله ذلك في أي وقت مهما كانت حالة الحساب. */
+  canEditUser: (u,target) => {
+    if(!target) return false;
+    if(Perm.isAuditor(u)) return true;
+    if(isProtectedType(target.user_type)) return false;
+    return target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id;
+  },
+  /* لا يحوّل أحد نوع مستخدم قائم إلى أحد الأنواع المحمية إلا مراجع اللجنة */
+  canAssignProtectedType: u => Perm.isAuditor(u),
   canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u) || Perm.isBoardMember(u),
   canAddExpenseType: u => Perm.isAuditor(u),
   /* موارد بشرية هي صاحبة صلاحية طلب الانتداب/الرحلة، وإن لم يوجد موارد بشرية بالاتحاد تنتقل للمحاسب */
@@ -437,6 +704,9 @@ const Perm = {
   canApproveParticipant: u => Perm.isTopApprover(u),
   /* منع الموافقة الذاتية: لو المشارك نفسه رئيس الاتحاد، ما يوافق عليه إلا المدير التنفيذي، والعكس صحيح */
   canApproveParticipantRecord: (u, participant) => {
+    /* المشارك المتجاوز لضوابط سفر مجلس الإدارة: مدير اللجنة وحده يعتمد سفره */
+    if(participant && participant.limit_flag===LIMIT_FLAG_OVER) return Perm.isCommitteeManager(u);
+    if(Perm.isCommitteeManager(u)) return true;
     if(!Perm.isTopApprover(u)) return false;
     const participantUser = userById(participant.user_id);
     const pType = participantUser ? participantUser.user_type : participant.user_type;
@@ -688,10 +958,27 @@ App.toggleIncludeOpen = function(){
   App.syncPeriodInputs();
   App.syncData();
 };
+/* اختيار سنة من القائمة يضبط الفترة على 1/1 → 31/12 لتلك السنة ثم يزامن */
+App.setPeriodYear = function(y){
+  const year = Number(y);
+  if(!year) return;
+  const pr = yearPeriod(String(year));
+  Period.from = pr.from; Period.to = pr.to; savePeriod();
+  App.syncPeriodInputs();
+  App.syncData();
+};
 App.syncPeriodInputs = function(){
   const f = document.getElementById('perFrom'), t = document.getElementById('perTo');
   if(f) f.value = Period.from;
   if(t) t.value = Period.to;
+  const ys = document.getElementById('perYear');
+  if(ys){
+    const sel = currentPeriodYear();
+    const years = periodYearOptions();
+    // الأرقام تُكتب كنص لاتيني صريح فلا تتحوّل لأرقام عربية-هندية
+    ys.innerHTML = `<option value="">— مخصص —</option>` + years.map(y=>`<option value="${y}" ${sel===y?'selected':''}>${y}</option>`).join('');
+    ys.value = sel === null ? '' : String(sel);
+  }
   const ob = document.getElementById('perOpenBtn');
   if(ob) ob.classList.toggle('on', !!Period.includeOpen);
 };
@@ -1049,7 +1336,7 @@ Modals.renderAddTripBody = function(){
   const participantsRows = d.participants.length ? d.participants.map((p,idx)=>`
     <div class="activity-row">
       <span class="ai">🧍</span>
-      <span class="at grow"><b>${esc(userLabel(p.user_id))}</b> — ${esc(p.ticket_type||'—')} <span class="muted small">(${esc(p.user_type||'—')})</span></span>
+      <span class="at grow"><b>${esc(userLabel(p.user_id))}</b> — ${esc(p.role_task||'—')} <span class="muted small">(${esc(p.user_type||'—')} · ${esc(p.ticket_type||'—')})</span></span>
       <span class="atime">${money(p.total_amount)}</span>
       <button class="btn btn-ghost btn-sm" onclick="Modals.removeDraftParticipant(${idx})">✕ حذف</button>
     </div>`).join('') : `<div class="empty-row">لا يوجد مشاركون بعد — إضافة مشارك واحد على الأقل إلزامية قبل حفظ الرحلة</div>`;
@@ -1168,13 +1455,14 @@ function buildTripPrintHTML(tripId, fileUrlMap){
     <tr>
       <td>${esc(userLabel(p.user_id))}${!p.is_linked_to_trip?' ⚠':''}${p.is_car_traveler?' 🚗':''}</td>
       <td>${esc(p.user_type||'—')}</td>
+      <td>${esc(p.role_task||'—')}</td>
       <td>${esc(p.ticket_type||'—')}</td>
       <td>${p.ticket_submitted?money(p.ticket_price):'—'}</td>
       <td>${money(p.amount_delegations)}</td>
       <td>${p.ticket_submitted?money(p.total_amount):money(p.amount_delegations)}</td>
       <td>${esc(DELEGATION_STATUS_LABELS[p.delegations_status]||p.delegations_status||'—')}</td>
       <td>${fileLink(p.file)}</td>
-    </tr>`).join('') : `<tr><td colspan="8"><div class="print-empty">لا يوجد مشاركون</div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="9"><div class="print-empty">لا يوجد مشاركون</div></td></tr>`;
 
   const expenseRows = f.otherExp.length ? f.otherExp.map(e=>`
     <tr>
@@ -1228,7 +1516,7 @@ function buildTripPrintHTML(tripId, fileUrlMap){
 
     <div class="print-section-title">👥 المشاركون في الانتداب (⚠ = غير مطابق لتفاصيل الرحلة، 🚗 = تعويض سفر بالسيارة)</div>
     <table class="print-tbl">
-      <thead><tr><th>المشارك</th><th>النوع</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th>المرفق</th></tr></thead>
+      <thead><tr><th>المشارك</th><th>النوع</th><th>المهمة / الدور</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th>المرفق</th></tr></thead>
       <tbody>${participantRows}</tbody>
       ${f.participants.length ? `<tfoot><tr><td colspan="5">الإجمالي</td><td>${money(f.participants.reduce((s,p)=>s+Number(p.total_amount||0),0))}</td><td colspan="2"></td></tr></tfoot>` : ''}
     </table>
@@ -1304,12 +1592,13 @@ function buildAssignmentDecisionPrintHTML(tripId){
     <tr>
       <td>${esc(userLabel(p.user_id))}${!p.is_linked_to_trip?' ⚠':''}</td>
       <td>${esc(p.user_type||'—')}</td>
+      <td>${esc(p.role_task||'—')}</td>
       <td>${esc(p.ticket_type||'—')}</td>
       <td>${fmtDate(p.start_date)}</td>
       <td>${fmtDate(p.end_date)}</td>
       <td>${esc(p.delegation_days_count||'—')}</td>
       <td>${esc(DELEGATION_STATUS_LABELS[p.delegations_status]||p.delegations_status||'—')}</td>
-    </tr>`).join('') : `<tr><td colspan="7"><div class="print-empty">لا يوجد مشاركون</div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="8"><div class="print-empty">لا يوجد مشاركون</div></td></tr>`;
 
   return `
   <div class="print-doc">
@@ -1346,7 +1635,7 @@ function buildAssignmentDecisionPrintHTML(tripId){
 
     <div class="print-section-title">👥 المشاركون المكلَّفون (⚠ = غير مطابق لتفاصيل الرحلة)</div>
     <table class="print-tbl">
-      <thead><tr><th>المشارك</th><th>النوع</th><th>نوع التذكرة</th><th>من</th><th>إلى</th><th>عدد الأيام</th><th>الحالة</th></tr></thead>
+      <thead><tr><th>المشارك</th><th>النوع</th><th>المهمة / الدور</th><th>نوع التذكرة</th><th>من</th><th>إلى</th><th>عدد الأيام</th><th>الحالة</th></tr></thead>
       <tbody>${participantRows}</tbody>
     </table>
 
@@ -1426,7 +1715,8 @@ Views.tripDetail = function(tripId){
     const ticketPriceCell = pt.ticket_submitted ? money(pt.ticket_price) : `<span class="muted">— لم تُدخل بعد —</span>`;
     const totalCell = pt.ticket_submitted ? money(pt.total_amount) : money(pt.amount_delegations)+` <span class="muted small">(بدون تذكرة بعد)</span>`;
     return `<tr>
-      <td>${esc(userLabel(pt.user_id))} ${notMatchBadge} ${carBadge}</td>
+      <td>${esc(userLabel(pt.user_id))} ${notMatchBadge} ${carBadge} ${limitBadge(pt.limit_flag, pt.limit_note)}${pt.limit_note?`<div class="muted small">${esc(pt.limit_note)}</div>`:''}</td>
+      <td>${esc(pt.role_task||'—')}</td>
       <td>${esc(pt.ticket_type||'—')}</td>
       <td class="num">${ticketPriceCell}</td>
       <td class="num">${money(pt.amount_delegations)}</td>
@@ -1440,7 +1730,7 @@ Views.tripDetail = function(tripId){
         ${canDelete?`<button class="btn btn-ghost btn-sm" onclick="Actions.deleteParticipant('${pt.delegation_id}','${t.trip_id}')">🗑 حذف</button>`:''}
       </div></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="7"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
+  }).join('') : `<tr><td colspan="8"><div class="empty-row">لا يوجد مشاركون بعد</div></td></tr>`;
 
   const canAddExpense = Perm.canManageOtherExpenses(u,t);
   const expenseRows = f.otherExp.length ? f.otherExp.map(e=>{
@@ -1493,7 +1783,7 @@ Views.tripDetail = function(tripId){
         </div>
       </div>
       <div class="tbl-wrap" style="border:none;border-top:1px solid var(--line);border-radius:0 0 12px 12px;">
-        <table class="tbl"><thead><tr><th>المشارك</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead>
+        <table class="tbl"><thead><tr><th>المشارك</th><th>المهمة / الدور</th><th>نوع التذكرة</th><th>سعر التذكرة</th><th>بدل الانتداب</th><th>الإجمالي</th><th>الحالة</th><th></th></tr></thead>
         <tbody>${participantRows}</tbody></table>
       </div>
     </div>
@@ -1677,7 +1967,7 @@ Modals.addParticipant = function(tripId){
     mode:'existing', trip_id: tripId, user_type_filter:'', user_id: fedUsers[0]?fedUsers[0].user_id:'',
     is_linked_to_trip: true, start_date: t.start_date, end_date: t.end_date,
     is_transportation_available: !!t.is_transportation_available, is_accommodation_available: !!t.is_accommodation_available,
-    ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:''
+    ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:'', role_task:''
   };
   openModalHTML(modalShell('addParticipantModal','إضافة مشارك للانتداب', Modals.renderAddParticipantBody(), true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
@@ -1690,7 +1980,7 @@ Modals.addParticipantDraft = function(){
     mode:'draft', trip_id:null, user_type_filter:'', user_id: fedUsers[0]?fedUsers[0].user_id:'',
     is_linked_to_trip: true, start_date: TripDraft.start_date, end_date: TripDraft.end_date,
     is_transportation_available: !!TripDraft.is_transportation_available, is_accommodation_available: !!TripDraft.is_accommodation_available,
-    ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:''
+    ticket_type: TICKET_TYPES[0], is_car_traveler:false, ticket_price:0, amount_delegations:0, hours_count:'', justification:'', role_task:''
   };
   openModalHTML(modalShell('addParticipantModal','إضافة مشارك للانتداب', Modals.renderAddParticipantBody(), true,
     `<button class="btn btn-outline" onclick="Modals.reopenAddTripModal()">إلغاء</button>
@@ -1699,7 +1989,7 @@ Modals.addParticipantDraft = function(){
 /* منطق أهلية نوع التذكرة حسب نوع المشارك (المستخدم المختار) نفسه:
    - رئيس الاتحاد: يقدر يختار اقتصادية أو أعمال بحرية.
    - مدير تنفيذي: يظهر له حقل "عدد الساعات"، وإذا تجاوزت 6 ساعات يقدر يختار أعمال، وإلا فاقتصادية تلقائيًا.
-   - أي نوع آخر (موظف/محاسب/موارد بشرية/حكم/متعاون/لاعب...): اقتصادية تلقائيًا دائمًا، بدون اختيار. */
+   - أي نوع آخر (موظف/محاسب/موارد بشرية/حكم/متعاون/لاعب/مرافق لاعب...): اقتصادية تلقائيًا دائمًا، بدون اختيار. */
 function ticketTypeMode(resolvedType, hoursCount){
   if(resolvedType==='رئيس الاتحاد') return 'choice';
   if(resolvedType==='مدير تنفيذي') return (numVal(hoursCount) > 6) ? 'choice' : 'forced';
@@ -1745,6 +2035,15 @@ Modals.renderAddParticipantBody = function(){
     ? `<div class="field"><label>عدد ساعات الرحلة <span class="muted">— إلزامي، أكثر من 6 ساعات يفتح خيار الأعمال</span></label><input type="text" inputmode="decimal" autocomplete="off" id="pgHours" placeholder="مثال: 7.5" value="${esc(d.hours_count)}" oninput="ParticipantDraft.hours_count=numInput(this)" onblur="Modals.updateParticipantField('hours_count',numInput(this))"></div>`
     : '';
 
+  /* تقييم ضوابط سفر مجلس الإدارة — يظهر مباشرة عند اختيار المشارك */
+  const limitEval = d.user_id ? evaluateParticipantDraft(d, t) : { level:'ok', notes:[] };
+  const limitBlock = limitEval.level==='ok' ? '' : `
+    <div class="alert ${limitEval.level==='over'?'alert-danger':'alert-warning'} full" style="grid-column:1/-1;">
+      <b>${limitEval.level==='over'?'🔴 تجاوز ضوابط سفر مجلس الإدارة':'🟡 بلغ الحد المسموح به'}</b>
+      <ul style="margin:6px 18px 0;padding:0;">${limitEval.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
+      ${limitEval.level==='over'?'<div class="mt-8">سيُدرج المشارك ضمن الرحلة مع هذه الملاحظة، ولا يعتمد سفره إلا <b>مدير اللجنة</b>.</div>':''}
+    </div>`;
+
   /* المبرر يظهر فقط إذا كانت غير مطابقة لتفاصيل الرحلة */
   const justificationBlock = !d.is_linked_to_trip
     ? `<div class="field full"><label>المبرر <span class="muted">— إلزامي</span></label><textarea rows="2" id="pgJustification" oninput="Modals.updateParticipantField('justification',this.value)">${esc(d.justification)}</textarea></div>`
@@ -1754,6 +2053,7 @@ Modals.renderAddParticipantBody = function(){
     <div class="form-grid">
       <div class="field"><label>نوع المستخدم <span class="muted">— تصفية، أو يتحدّد تلقائيًا عند اختيار المشارك</span></label><select onchange="Modals.updateParticipantTypeFilter(this.value)">${typeFilterOpts}</select></div>
       <div class="field"><label>المشارك <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('user_id',this.value)">${usersOpts}</select></div>
+      <div class="field full"><label>المهمة أو الدور في الرحلة <span class="muted">— إلزامي لكل مشارك</span></label><input type="text" id="pgRoleTask" placeholder="مثال: رئيس الوفد / مدرب / إداري / لاعب / مرافق لاعب" value="${esc(d.role_task||'')}" oninput="ParticipantDraft.role_task=this.value" onblur="Modals.updateParticipantField('role_task',this.value)"></div>
       <div class="field"><label>مطابق لتفاصيل الرحلة؟ <span class="muted">— إلزامي</span></label><select onchange="Modals.updateParticipantField('is_linked_to_trip',this.value==='true')">
         <option value="true" ${d.is_linked_to_trip?'selected':''}>نعم</option><option value="false" ${!d.is_linked_to_trip?'selected':''}>لا</option></select></div>
       ${matchBlock}
@@ -1761,6 +2061,7 @@ Modals.renderAddParticipantBody = function(){
       ${ticketBlock}
       <div class="field"><label>بدل الانتداب اليومي <span class="muted">— محسوب تلقائيًا حسب الجدول الرسمي</span></label><input type="text" value="${money(dailyAllowance)}" disabled></div>
       ${justificationBlock}
+      ${limitBlock}
       <div class="alert alert-info full" style="grid-column:1/-1;">سعر التذكرة ومرفقها يُدخلهما المحاسب لاحقًا بعد اعتماد قرار التكليف.</div>
     </div>
     <div class="mt-12 flex between" id="dgTotalRow" style="font-weight:800;"><span>الإجمالي (بدل الانتداب فقط حتى الآن)</span><span class="num" id="dgTotalAmount">${money(total)}</span></div>
@@ -1794,6 +2095,7 @@ Actions.saveParticipant = async function(){
   const t = participantSourceTrip();
   const u = Session.user;
   if(!d.user_id){ toast('اختر مشاركًا','danger'); return; }
+  if(!d.role_task || !String(d.role_task).trim()){ toast('المهمة أو الدور في الرحلة إلزامية لكل مشارك','danger'); return; }
   if(d.mode==='existing'){
     const tripRecord = DB.trips.find(x=>x.trip_id===d.trip_id);
     if(!Perm.canManageParticipants(u,tripRecord)){ toast('لا تملك صلاحية إضافة مشارك','danger'); return; }
@@ -1811,8 +2113,13 @@ Actions.saveParticipant = async function(){
   const transport = d.is_linked_to_trip ? !!t.is_transportation_available : !!d.is_transportation_available;
   const accom = d.is_linked_to_trip ? !!t.is_accommodation_available : !!d.is_accommodation_available;
   const amount = computeDailyAllowance(resolvedType, t.entity, days, transport, accom);
+  /* ضوابط سفر مجلس الإدارة: لا نمنع الإدراج، بل نُدرج المشارك ونعلّم سجله */
+  const limitEval = evaluateParticipantDraft(d, t);
+  const limitFlag = limitFlagOf(limitEval);
   const record = {
-    delegation_id: uid('dlg'), delegations_status:'غير معتمد', user_type: resolvedType, user_id:d.user_id,
+    delegation_id: uid('dlg'), delegations_status:'غير معتمد', user_type: resolvedType,
+    limit_flag: limitFlag, limit_note: limitEval.notes.join(' — ') || null,
+    role_task: String(d.role_task||'').trim(), user_id:d.user_id,
     amount_delegations: amount, is_linked_to_trip: !!d.is_linked_to_trip, justification: d.is_linked_to_trip ? null : d.justification,
     delegation_days_count: days, start_date:startDate, end_date:endDate,
     is_transportation_available: transport, is_accommodation_available: accom,
@@ -1824,12 +2131,20 @@ Actions.saveParticipant = async function(){
   if(d.mode==='draft'){
     TripDraft.participants.push(record);
     Modals.reopenAddTripModal();
-    toast('تمت إضافة المشارك للقائمة — سيُحفظ مع الرحلة','success');
+    toast(limitFlag===LIMIT_FLAG_OVER
+      ? '🔴 أُضيف للقائمة مع تجاوز ضوابط سفر مجلس الإدارة — لا يعتمد سفره إلا مدير اللجنة'
+      : 'تمت إضافة المشارك للقائمة — سيُحفظ مع الرحلة',
+      limitFlag===LIMIT_FLAG_OVER ? 'danger' : 'success');
     return;
   }
   const saved = await dbInsert('delegations', Object.assign({trip_id:d.trip_id, federation_number:t.federation_number}, record));
   if(!saved) return;
-  closeModal(); toast('تمت إضافة المشارك — بانتظار الاعتماد','success'); App.go('tripDetail',{id:d.trip_id});
+  closeModal();
+  toast(limitFlag===LIMIT_FLAG_OVER
+    ? '🔴 أُدرج المشارك مع تجاوز ضوابط سفر مجلس الإدارة — لا يعتمد سفره إلا مدير اللجنة'
+    : (limitFlag===LIMIT_FLAG_AT ? '🟡 أُدرج المشارك وقد بلغ حده المسموح به' : 'تمت إضافة المشارك — بانتظار الاعتماد'),
+    limitFlag===LIMIT_FLAG_OVER ? 'danger' : 'success');
+  App.go('tripDetail',{id:d.trip_id});
   } finally {
     SubmitLock.saveParticipant = false;
     const lockBtn2 = document.getElementById('saveParticipantBtn');
@@ -1841,6 +2156,8 @@ Modals.viewParticipant = function(delegationId){
   const rows = [
     ['المشارك', userLabel(d.user_id)],
     ['نوع المستخدم', d.user_type||'—'],
+    ['المهمة / الدور في الرحلة', d.role_task||'—'],
+    ['ضوابط سفر مجلس الإدارة', d.limit_flag ? (d.limit_flag + (d.limit_note?(' — '+d.limit_note):'')) : 'ضمن الضوابط'],
     ['تاريخ البداية', fmtDate(d.start_date)],
     ['تاريخ النهاية', fmtDate(d.end_date)],
     ['عدد الأيام', d.delegation_days_count||'—'],
@@ -1862,7 +2179,12 @@ Modals.viewParticipant = function(delegationId){
 Actions.approveParticipant = async function(delegationId){
   const u = Session.user;
   const p = DB.delegations.find(x=>x.delegation_id===delegationId);
-  if(!p || !Perm.canApproveParticipantRecord(u,p)){ toast('لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)','danger'); return; }
+  if(!p || !Perm.canApproveParticipantRecord(u,p)){
+    toast(p && p.limit_flag===LIMIT_FLAG_OVER
+      ? 'هذا المشارك متجاوز لضوابط سفر مجلس الإدارة — لا يعتمد سفره إلا مدير اللجنة'
+      : 'لا تملك صلاحية الموافقة على هذا المشارك (قد يتطلب اعتماد جهة أخرى لتفادي تعارض المصالح)','danger');
+    return;
+  }
   const { error } = await apiAction('approveParticipant', { delegationId });
   if(error){ toast('تعذّر الاعتماد: ' + error.message, 'danger'); return; }
   await refreshAfterAction();
@@ -1979,7 +2301,7 @@ Modals.addOtherExpense = function(tripId){
      <button class="btn btn-primary" id="saveOtherExpenseBtn" onclick="Actions.saveOtherExpense('${tripId}')">حفظ</button>`));
 };
 Modals.renderAddOtherExpenseBody = function(etOpts){
-  const beneficiaryChips = USER_TYPES.filter(t=>t!=='مراجع').map(t=>
+  const beneficiaryChips = USER_TYPES.filter(t=>!COMMITTEE_TYPES.includes(t)).map(t=>
     `<span class="chip ${OtherExpenseBeneficiaries.includes(t)?'on':''}" onclick="Modals.toggleOeBeneficiary('${t}')">${esc(t)}</span>`
   ).join('');
   return `
@@ -2257,8 +2579,13 @@ Views.users = function(){
     const canChangeStatus = Perm.canChangeUserStatusFor(u, x);
     const canEdit = Perm.canEditUser(u,x);
     const stats = userTravelStats(x.user_id);
+    /* ضوابط سفر مجلس الإدارة: أحمر = تجاوز، أصفر = بلغ حده ووقف */
+    const usage = boardUsageStatus(x, String(new Date().getFullYear()));
+    const usageColor = usage.level==='over' ? 'var(--danger)' : (usage.level==='at' ? '#b8860b' : '');
+    const usageBadge = usage.level==='ok' ? '' :
+      `<div class="muted small" style="color:${usageColor};font-weight:700;">${usage.level==='over'?'🔴 تجاوز ضوابط السفر':'🟡 بلغ حد السفر'} — ${esc(usage.notes.join(' · '))}</div>`;
     return `<tr>
-      <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b>${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div></td>
+      <td class="clickable-row" onclick="App.go('userDetail',{id:'${x.user_id}'})"><b style="${usageColor?`color:${usageColor};`:''}">${esc(x.employee_name_ar||'—')}</b><div class="muted small">${esc(x.user_name||'')}</div>${usageBadge}</td>
       <td>${esc(x.user_type||'—')}</td>
       <td>${esc(x.Job_Title||'—')}</td>
       <td>${esc(x.phone||'—')}</td>
@@ -2308,10 +2635,47 @@ Views.exportUsersList = function(){
   const rows = list.map(x=>{ const s=userTravelStats(x.user_id); return [x.employee_name_ar||'—', x.user_type||'—', x.Job_Title||'—', x.phone||'—', s.count, s.amount, x.user_status||'—']; });
   exportListToExcel('users-list', ['الاسم','النوع','المسمى الوظيفي','الجوال','عدد السفريات','المبلغ (المعتمد)','الحالة'], rows);
 };
+/* ------------------------------------------------------------------
+   سؤال "هل الرئيس عضو في اتحاد قاري؟" يظهر فقط عند اختيار نوع المستخدم
+   "رئيس مجلس الادارة"، ويختفي تلقائيًا لأي نوع آخر.
+   ------------------------------------------------------------------ */
+function toggleContinentalField(prefix){
+  const sel = document.getElementById(prefix+'Type');
+  const row = document.getElementById(prefix+'ContRow');
+  if(!row) return;
+  const val = sel ? sel.value : '';
+  row.style.display = asksContinental(val) ? '' : 'none';
+}
+function continentalFieldHTML(prefix, current, show){
+  return `<div class="field" id="${prefix}ContRow" style="display:${show?'':'none'};">
+      <label>عضو في اتحاد قاري؟ <span class="muted">— لرئيس وأعضاء مجلس الإدارة</span></label>
+      <select id="${prefix}Cont">
+        <option value="false" ${!current?'selected':''}>لا</option>
+        <option value="true" ${current?'selected':''}>نعم</option>
+      </select></div>`;
+}
+function continentalValue(prefix){
+  const el = document.getElementById(prefix+'Cont');
+  const sel = document.getElementById(prefix+'Type');
+  if(!el || !sel || !asksContinental(sel.value)) return false;
+  return el.value==='true';
+}
+/* خيارات نوع المستخدم — الأنواع المحمية لا تظهر لغير مراجع اللجنة عند
+   التعديل، إلا إن كانت هي نوع المستخدم الحالي (فتُعرض معطّلة للعلم فقط). */
+function userTypeOptionsHTML(currentType, editing){
+  const u = Session.user;
+  const allowProtected = Perm.canAssignProtectedType(u);
+  const allowCommittee = Perm.isCommitteeManager(u); // مدير اللجنة وحده يضيف مراجعين
+  return USER_TYPES
+    .filter(t=> allowCommittee || !COMMITTEE_TYPES.includes(t) || t===currentType)
+    .filter(t=> allowProtected || !isProtectedType(t) || t===currentType || !editing)
+    .map(t=>`<option value="${t}" ${currentType===t?'selected':''}>${t}</option>`).join('');
+}
+
 Modals.addUser = function(){
   const u = Session.user;
   const isAud = Perm.isAuditor(u);
-  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
+  const typeOpts = userTypeOptionsHTML('', false);
   const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
     <div class="alert alert-info">لا حاجة لكتابة كلمة مرور — يولّدها النظام تلقائيًا ويرسلها إلى بريد المستخدم نفسه، ولا يطّلع عليها أحد سواه.</div>
@@ -2319,7 +2683,8 @@ Modals.addUser = function(){
       ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="nuNameAr"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="nuNameEn"></div>
-      <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
+      <div class="field"><label>نوع المستخدم</label><select id="nuType" onchange="toggleContinentalField('nu')">${typeOpts}</select></div>
+      ${continentalFieldHTML('nu', false, false)}
       <div class="field"><label>المسمى الوظيفي</label><input type="text" id="nuJob"></div>
       <div class="field"><label>الجوال</label><input type="text" id="nuPhone"></div>
       <div class="field"><label>البريد الإلكتروني</label><input type="email" id="nuEmail"></div>
@@ -2328,6 +2693,7 @@ Modals.addUser = function(){
   openModalHTML(modalShell('addUserModal','إضافة مستخدم', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.saveUser()">حفظ</button>`));
+  toggleContinentalField('nu');
 };
 Actions.saveUser = async function(){
   const u = Session.user;
@@ -2345,6 +2711,7 @@ Actions.saveUser = async function(){
     national_id:null, nationality:null, phone: document.getElementById('nuPhone').value, email: email,
     // بلا كلمة مرور: الخادم يولّدها ويرسلها لبريد المستخدم
     user_name: username, user_type: document.getElementById('nuType').value,
+    is_continental_member: continentalValue('nu'),
     Job_Title: document.getElementById('nuJob').value, language:'ar', created_at: nowISO(), created_by: u.user_id
   };
   const saved = await dbInsertUser(obj);
@@ -2361,12 +2728,21 @@ Actions.saveUser = async function(){
 };
 Modals.editUser = function(userId){
   const x = DB.users.find(u2=>u2.user_id===userId);
-  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}" ${x.user_type===t?'selected':''}>${t}</option>`).join('');
+  if(!Perm.canEditUser(Session.user, x)){
+    toast(isProtectedType(x&&x.user_type) ? 'بيانات هذا المستخدم (نوعه ومسماه الوظيفي) لا يعدّلها إلا مراجع اللجنة' : 'لا يمكن تعديل هذا المستخدم','danger');
+    return;
+  }
+  const typeOpts = userTypeOptionsHTML(x.user_type, true);
+  const protectedNote = Perm.canAssignProtectedType(Session.user)
+    ? `<div class="alert alert-warning">أنت مراجع اللجنة — وحدك من يملك تعديل نوع المستخدم والمسمى الوظيفي لـ (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) أو تفعيل حساباتهم.</div>`
+    : `<div class="alert alert-info">الأنواع (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) لا تظهر في القائمة لأن تعيينها من صلاحية مراجع اللجنة حصرًا.</div>`;
   const body = `
+    ${protectedNote}
     <div class="form-grid">
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="euNameAr" value="${esc(x.employee_name_ar||'')}"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="euNameEn" value="${esc(x.employee_name_en||'')}"></div>
-      <div class="field"><label>نوع المستخدم</label><select id="euType">${typeOpts}</select></div>
+      <div class="field"><label>نوع المستخدم</label><select id="euType" onchange="toggleContinentalField('eu')">${typeOpts}</select></div>
+      ${continentalFieldHTML('eu', !!x.is_continental_member, asksContinental(x.user_type))}
       <div class="field"><label>المسمى الوظيفي</label><input type="text" id="euJob" value="${esc(x.Job_Title||'')}"></div>
       <div class="field"><label>الجوال</label><input type="text" id="euPhone" value="${esc(x.phone||'')}"></div>
       <div class="field"><label>البريد الإلكتروني</label><input type="email" id="euEmail" value="${esc(x.email||'')}"></div>
@@ -2375,14 +2751,19 @@ Modals.editUser = function(userId){
   openModalHTML(modalShell('editUserModal','تعديل بيانات المستخدم', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.updateUser('${userId}')">حفظ</button>`));
+  toggleContinentalField('eu');
 };
 Actions.updateUser = async function(userId){
   const u = Session.user;
   const x = DB.users.find(u2=>u2.user_id===userId);
-  if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم','danger'); return; }
+  if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم — الأنواع القيادية لا يعدّلها إلا مراجع اللجنة','danger'); return; }
+  const newType = document.getElementById('euType').value;
+  if(isProtectedType(newType) && newType!==x.user_type && !Perm.canAssignProtectedType(u)){
+    toast('تعيين نوع المستخدم إلى (رئيس الاتحاد / مدير تنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) من صلاحية مراجع اللجنة فقط','danger'); return;
+  }
   const patch = {
     employee_name_ar: document.getElementById('euNameAr').value, employee_name_en: document.getElementById('euNameEn').value,
-    user_type: document.getElementById('euType').value, Job_Title: document.getElementById('euJob').value,
+    user_type: newType, is_continental_member: continentalValue('eu'), Job_Title: document.getElementById('euJob').value,
     phone: document.getElementById('euPhone').value, email: document.getElementById('euEmail').value
   };
   const saved = await dbUpdateUser(userId, patch);
@@ -2392,7 +2773,9 @@ Actions.updateUser = async function(userId){
 Actions.setUserStatus = async function(userId,status){
   const u = Session.user;
   const target = DB.users.find(x=>x.user_id===userId);
-  if(!Perm.canChangeUserStatusFor(u, target)){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
+  if(!Perm.canChangeUserStatusFor(u, target)){
+    toast(isProtectedType(target&&target.user_type) ? 'حسابات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) لا يفعّلها أو يغيّر حالتها إلا مراجع اللجنة' : 'لا تملك صلاحية تغيير الحالة','danger'); return;
+  }
   const { error } = await apiAction('changeUserStatus', { userId, newStatus: status });
   if(error){ toast('تعذّر تحديث الحالة: ' + error.message, 'danger'); return; }
   await refreshAfterAction();
@@ -2435,7 +2818,11 @@ Views.userDetail = function(userId){
     <div class="card card-pad mt-8">
       <div class="flex center gap-16">
         <div class="sb-avatar" style="width:56px;height:56px;border-radius:50%;background:var(--teal-soft);color:var(--teal-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;">${esc((target.employee_name_ar||'?').trim()[0]||'?')}</div>
-        <div><h2 style="margin:0;">${esc(target.employee_name_ar)}</h2><div class="muted small">${esc(target.Job_Title||target.user_type)} · ${esc(fed?fed.federation_name_ar:'—')}</div></div>
+        <div><h2 style="margin:0;">${esc(target.employee_name_ar)}</h2><div class="muted small">${esc(target.Job_Title||target.user_type)} · ${esc(fed?fed.federation_name_ar:'—')}</div>
+          ${(()=>{ const usg = boardUsageStatus(target, String(new Date().getFullYear()));
+            if(usg.level==='ok') return '';
+            return `<div class="alert ${usg.level==='over'?'alert-danger':'alert-warning'} mt-8"><b>${usg.level==='over'?'🔴 تجاوز ضوابط سفر مجلس الإدارة':'🟡 بلغ الحد المسموح به'}</b><ul style="margin:6px 18px 0;padding:0;">${usg.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></div>`; })()}
+        </div>
         <div style="margin-inline-start:auto;">${userStatusBadge(target.user_status)}</div>
       </div>
       <div class="kv-grid mt-16">
@@ -2503,6 +2890,7 @@ function buildUserProfilePrintHTML(userId){
 
     <table class="print-kv">
       <tr><td class="lbl">اسم المستخدم</td><td class="val">${esc(target.user_name||'—')}</td><td class="lbl">المسمى الوظيفي</td><td class="val">${esc(target.Job_Title||target.user_type||'—')}</td></tr>
+      ${asksContinental(target.user_type) ? `<tr><td class="lbl">عضو في اتحاد قاري</td><td class="val">${target.is_continental_member?'نعم':'لا'}</td><td class="lbl"></td><td class="val"></td></tr>` : ''}
       <tr><td class="lbl">الجوال</td><td class="val">${esc(target.phone||'—')}</td><td class="lbl">البريد الإلكتروني</td><td class="val">${esc(target.email||'—')}</td></tr>
       <tr><td class="lbl">تاريخ الانضمام</td><td class="val">${fmtDate(target.created_at)}</td><td class="lbl">الاتحاد</td><td class="val">${esc(fed?fed.federation_name_ar:'—')}</td></tr>
     </table>

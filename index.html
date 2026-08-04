@@ -16,6 +16,9 @@
 .period-sep{opacity:.5;font-size:12px;}
 .period-input{font-family:inherit;font-size:12.5px;padding:5px 8px;border-radius:8px;border:1px solid var(--border,#d9ddd6);background:var(--card,#fff);color:inherit;min-width:132px;}
 .period-input:focus{outline:none;border-color:var(--primary,#2f6f4e);}
+/* أرقام الفلتر (السنة والتواريخ) تُعرض بالأرقام الإنجليزية اللاتينية دائمًا */
+.period-input,.period-year{font-variant-numeric:lining-nums tabular-nums;font-feature-settings:'lnum' 1,'tnum' 1;}
+.period-year{min-width:92px;text-align:center;font-weight:700;}
 #perOpenBtn.on{background:var(--primary,#2f6f4e);color:#fff;border-color:var(--primary,#2f6f4e);}
 @media (max-width:760px){
   .topbar{flex-wrap:wrap;row-gap:8px;}
@@ -68,12 +71,14 @@
         </div>
       </div>
       <div class="period-bar">
+        <span class="period-lbl">العام</span>
+        <select id="perYear" class="period-input period-year" lang="en" dir="ltr" aria-label="السنة" onchange="App.setPeriodYear(this.value)"></select>
         <span class="period-lbl">الفترة</span>
-        <input type="date" lang="en-GB" id="perFrom" class="period-input" aria-label="من تاريخ">
+        <input type="date" lang="en-GB" dir="ltr" id="perFrom" class="period-input" aria-label="من تاريخ">
         <span class="period-sep">←</span>
-        <input type="date" lang="en-GB" id="perTo" class="period-input" aria-label="إلى تاريخ">
+        <input type="date" lang="en-GB" dir="ltr" id="perTo" class="period-input" aria-label="إلى تاريخ">
         <button class="btn btn-outline btn-sm" id="perOpenBtn" onclick="App.toggleIncludeOpen()" title="إظهار كل العهد غير المغلقة حتى لو كانت من فترات سابقة">🔓 العهد المفتوحة</button>
-        <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="آخر سنة">آخر سنة</button>
+        <button class="btn btn-outline btn-sm" id="perResetBtn" onclick="App.resetPeriod()" title="السنة الحالية كاملة من 1/1 إلى 31/12">السنة الحالية</button>
         <button class="btn btn-primary btn-sm" id="syncBtn" onclick="App.syncData()">🔄 مزامنة</button>
       </div>
     </div>
@@ -91,7 +96,7 @@
 
 const SCHEMA = {
   federations: ['federation_id','federation_name_ar','federation_name_en','image','created_by','created_at'],
-  users: ['user_id','federation_id','user_status','employee_name_ar','employee_name_en','national_id','nationality','phone','email','user_name','password','user_type','Job_Title','language','created_at','created_by'],
+  users: ['user_id','federation_id','user_status','employee_name_ar','employee_name_en','national_id','nationality','phone','email','user_name','password','user_type','Job_Title','is_continental_member','language','created_at','created_by'],
   custodies: ['custody_id','federation_id','custody_status','received_by_user_id','custody_type','description_ar','description_en','disbursement_location','cost_center_id','Opening_balance','Custody_balance','Closing_date','created_by','created_at','request_approved_by','request_approval_date','closure_approved_by','closure_approval_date','Print_Count'],
   custody_closures: ['closure_id','federation_id','disbursement_status','user_id','custody_id','expense_type_id','cost_center_id','statement','currency','foreign_amount','exchange_rate','amount','file','entry_location','created_by','created_at','approved_by','approved_at'],
   custody_transfers: ['transfer_id','federation_id','transfer_status','user_id','custody_id','statement','currency','foreign_amount','exchange_rate','amount','file','created_at','created_by','approved_by','approved_at'],
@@ -101,9 +106,19 @@ const SCHEMA = {
 };
 const PK = {federations:'federation_id',users:'user_id',custodies:'custody_id',custody_closures:'closure_id',custody_transfers:'transfer_id',custody_budgets:'budget_id',expense_types:'account_number',cost_centers:'cost_center_id'};
 
-const USER_TYPES = ['مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','عضو مجلس الادارة','لاعب','حكم','متعاون'];
+const USER_TYPES = ['مدير اللجنة','مراجع','رئيس الاتحاد','مدير تنفيذي','محاسب','موظف','موارد بشرية','رئيس مجلس الادارة','عضو مجلس الادارة','لاعب','مرافق لاعب','حكم','متعاون'];
+/* أنواع لا تُعدَّل بياناتها (ومنها المسمى الوظيفي ونوع المستخدم) ولا تُفعَّل
+   حساباتها (جعلها "مفتوح") إلا من مراجع اللجنة أو مدير اللجنة حصرًا. */
+const PROTECTED_USER_TYPES = ['مدير اللجنة','مراجع','رئيس الاتحاد','مدير تنفيذي','رئيس مجلس الادارة','عضو مجلس الادارة'];
+function isProtectedType(t){ return PROTECTED_USER_TYPES.includes(t); }
+/* أنواع لجنة الإشراف — لا يعيّنها إلا مدير اللجنة نفسه (هو وحده من يضيف مراجعين) */
+const COMMITTEE_TYPES = ['مدير اللجنة','مراجع'];
+/* الأنواع التي يظهر معها سؤال "عضو في اتحاد قاري؟" */
+const CONTINENTAL_QUESTION_TYPES = ['رئيس مجلس الادارة','عضو مجلس الادارة'];
+function asksContinental(t){ return CONTINENTAL_QUESTION_TYPES.includes(t); }
 // أنواع لا يُسمح لها بتسجيل الدخول إلى أي نظام إطلاقًا (سجلات فقط داخل النظام)
-const NO_LOGIN_USER_TYPES = ['لاعب','حكم','متعاون'];
+// "مرافق لاعب" له نفس معاملة اللاعب تمامًا: سجل فقط بلا حق دخول.
+const NO_LOGIN_USER_TYPES = ['لاعب','مرافق لاعب','حكم','متعاون'];
 const USER_STATUSES = ['مفتوح','مغلق','تحت المعالجة','مسودة'];
 const CUSTODY_TYPES = ['عهدة نقدية دائمة','عهدة نقدية مؤقتة'];
 // الحد الأعلى لإجمالي المصاريف التقديرية (طلب + تغذية) للعهدة النقدية الدائمة فقط
@@ -154,14 +169,23 @@ function toast(msg, kind){
 
 /* ---------------------------- Permissions ---------------------------- */
 const Perm = {
-  isAuditor: u => u && u.user_type === 'مراجع',
+  /* مدير اللجنة ومراجع اللجنة كلاهما مشرف على كل الاتحادات (نفس نطاق الرؤية).
+     ما ينفرد به مدير اللجنة: إضافة المراجعين، واعتماد سفر مجلس الإدارة
+     المتجاوز للضوابط. */
+  isCommitteeManager: u => u && u.user_type === 'مدير اللجنة',
+  isAuditor: u => u && (u.user_type === 'مراجع' || u.user_type === 'مدير اللجنة'),
+  isReviewer: u => u && u.user_type === 'مراجع',
   isPresident: u => u && u.user_type === 'رئيس الاتحاد',
   isExec: u => u && u.user_type === 'مدير تنفيذي',
   isAccountant: u => u && u.user_type === 'محاسب',
   isEmployee: u => u && u.user_type === 'موظف',
   isHR: u => u && u.user_type === 'موارد بشرية',
-  isBoardMember: u => u && u.user_type === 'عضو مجلس الادارة',
-  isPlayer: u => u && u.user_type === 'لاعب',
+  // رئيس مجلس الإدارة له نفس صلاحيات عضو مجلس الإدارة تمامًا
+  isBoardChair: u => u && u.user_type === 'رئيس مجلس الادارة',
+  isBoardMember: u => u && (u.user_type === 'عضو مجلس الادارة' || u.user_type === 'رئيس مجلس الادارة'),
+  // مرافق اللاعب له نفس معاملة اللاعب تمامًا
+  isPlayerCompanion: u => u && u.user_type === 'مرافق لاعب',
+  isPlayer: u => u && (u.user_type === 'لاعب' || u.user_type === 'مرافق لاعب'),
   isReferee: u => u && u.user_type === 'حكم',
   isCollaborator: u => u && u.user_type === 'متعاون',
   // الموارد البشرية لها نفس صلاحيات الموظف تمامًا
@@ -176,9 +200,25 @@ const Perm = {
   // المراجع مشرف على كل الاتحادات فيغيّر حالة أي مستخدم؛ رئيس الاتحاد
   // والمدير التنفيذي داخل اتحادهم فقط. ولا أحد يغيّر حالة حسابه هو.
   canChangeUserStatus: u => Perm.isTopApprover(u) || Perm.isAuditor(u),
-  canChangeUserStatusFor: (u,target) => target && target.user_id!==u.user_id &&
-    (Perm.isAuditor(u) ? true : (Perm.isTopApprover(u) && target.federation_id===u.federation_id)),
-  canEditUser: (u,target) => target && target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id,
+  /* حسابات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس
+     الإدارة) لا يفتحها ولا يغلقها إلا مراجع اللجنة — لا رئيس الاتحاد ولا
+     المدير التنفيذي. */
+  canChangeUserStatusFor: (u,target) => {
+    if(!target || target.user_id===u.user_id) return false;
+    if(Perm.isAuditor(u)) return true;
+    if(isProtectedType(target.user_type)) return false;
+    return Perm.isTopApprover(u) && target.federation_id===u.federation_id;
+  },
+  /* بيانات الأنواع المحمية (ومنها المسمى الوظيفي ونوع المستخدم) لا يعدّلها
+     إلا مراجع اللجنة، وله ذلك في أي وقت مهما كانت حالة الحساب. */
+  canEditUser: (u,target) => {
+    if(!target) return false;
+    if(Perm.isAuditor(u)) return true;
+    if(isProtectedType(target.user_type)) return false;
+    return target.user_status==='تحت المعالجة' && (Perm.isTopApprover(u)||Perm.isAccountant(u)) && target.federation_id===u.federation_id;
+  },
+  /* لا يحوّل أحد نوع مستخدم قائم إلى أحد الأنواع المحمية إلا مراجع اللجنة */
+  canAssignProtectedType: u => Perm.isAuditor(u),
   canManageCostCenters: u => Perm.isAccountant(u) || Perm.isTopApprover(u) || Perm.isBoardMember(u),
   canAddExpenseType: u => Perm.isAuditor(u),
   canRequestCustody: u => !Perm.isAuditor(u),
@@ -449,12 +489,10 @@ function attachBtnHTML(filePath){
    والإحصائيات (الرئيسية، القوائم، المستخدمون، التقارير) بلا استثناء.
    ------------------------------------------------------------------- */
 const PERIOD_KEY = 'custody_period_v1';
-function defaultPeriod(){
-  const to = new Date();
-  const from = new Date(to.getFullYear()-1, to.getMonth(), to.getDate());
-  const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
-  return { from: iso(from), to: iso(to), includeOpen: true };
-}
+/* الفترة الافتراضية = السنة الميلادية الحالية كاملة: من 1/1 إلى 31/12،
+   وليست "سنة رجوعًا من تاريخ اليوم". كل سنة تبدأ من 1 يناير. */
+function yearPeriod(y){ return { from: y + '-01-01', to: y + '-12-31', includeOpen: true }; }
+function defaultPeriod(){ return yearPeriod(new Date().getFullYear()); }
 let Period = (function(){
   try{
     const saved = JSON.parse(localStorage.getItem(PERIOD_KEY) || 'null');
@@ -463,6 +501,21 @@ let Period = (function(){
   return defaultPeriod();
 })();
 function savePeriod(){ try{ localStorage.setItem(PERIOD_KEY, JSON.stringify(Period)); }catch(e){} }
+/* قائمة السنوات المتاحة في الفلتر — تُعرض بأرقام إنجليزية (لاتينية) دائمًا */
+function periodYearOptions(){
+  const cur = new Date().getFullYear();
+  const out = [];
+  for(let y = cur + 1; y >= cur - 6; y--) out.push(y);
+  return out;
+}
+/* السنة المختارة حاليًا إن كانت الفترة تغطي سنة ميلادية كاملة (1/1 → 31/12) */
+function currentPeriodYear(){
+  if(/^\d{4}-01-01$/.test(Period.from||'') && Period.to === Period.from.slice(0,4) + '-12-31'){
+    return Number(Period.from.slice(0,4));
+  }
+  return null;
+}
+
 function periodLabel(){ return `${Period.from} ← ${Period.to}` + (Period.includeOpen ? ' + العهد المفتوحة' : ''); }
 /* الحالات التي تُعتبر "عهدة مفتوحة/غير مغلقة" */
 const OPEN_CUSTODY_STATUSES = ['مفتوحة','قيد الاعتماد'];
@@ -765,10 +818,27 @@ App.resetPeriod = function(){
   App.syncPeriodInputs();
   App.syncData();
 };
+/* اختيار سنة من القائمة يضبط الفترة على 1/1 → 31/12 لتلك السنة ثم يزامن */
+App.setPeriodYear = function(y){
+  const year = Number(y);
+  if(!year) return;
+  const pr = yearPeriod(String(year));
+  Period.from = pr.from; Period.to = pr.to; savePeriod();
+  App.syncPeriodInputs();
+  App.syncData();
+};
 App.syncPeriodInputs = function(){
   const f = document.getElementById('perFrom'), t = document.getElementById('perTo');
   if(f) f.value = Period.from;
   if(t) t.value = Period.to;
+  const ys = document.getElementById('perYear');
+  if(ys){
+    const sel = currentPeriodYear();
+    const years = periodYearOptions();
+    // الأرقام تُكتب كنص لاتيني صريح فلا تتحوّل لأرقام عربية-هندية
+    ys.innerHTML = `<option value="">— مخصص —</option>` + years.map(y=>`<option value="${y}" ${sel===y?'selected':''}>${y}</option>`).join('');
+    ys.value = sel === null ? '' : String(sel);
+  }
   const ob = document.getElementById('perOpenBtn');
   if(ob) ob.classList.toggle('on', !!Period.includeOpen);
 };
@@ -2908,10 +2978,47 @@ Views.exportUsersList = function(){
   exportListToExcel('users-list', ['الاسم','نوع المستخدم','المسمى الوظيفي','الجوال','رصيد العهد المفتوحة','الحالة'], rows);
 };
 
+/* ------------------------------------------------------------------
+   سؤال "هل الرئيس عضو في اتحاد قاري؟" يظهر فقط عند اختيار نوع المستخدم
+   "رئيس مجلس الادارة"، ويختفي تلقائيًا لأي نوع آخر.
+   ------------------------------------------------------------------ */
+function toggleContinentalField(prefix){
+  const sel = document.getElementById(prefix+'Type');
+  const row = document.getElementById(prefix+'ContRow');
+  if(!row) return;
+  const val = sel ? sel.value : '';
+  row.style.display = asksContinental(val) ? '' : 'none';
+}
+function continentalFieldHTML(prefix, current, show){
+  return `<div class="field" id="${prefix}ContRow" style="display:${show?'':'none'};">
+      <label>عضو في اتحاد قاري؟ <span class="muted">— لرئيس وأعضاء مجلس الإدارة</span></label>
+      <select id="${prefix}Cont">
+        <option value="false" ${!current?'selected':''}>لا</option>
+        <option value="true" ${current?'selected':''}>نعم</option>
+      </select></div>`;
+}
+function continentalValue(prefix){
+  const el = document.getElementById(prefix+'Cont');
+  const sel = document.getElementById(prefix+'Type');
+  if(!el || !sel || !asksContinental(sel.value)) return false;
+  return el.value==='true';
+}
+/* خيارات نوع المستخدم — الأنواع المحمية لا تظهر لغير مراجع اللجنة عند
+   التعديل، إلا إن كانت هي نوع المستخدم الحالي (فتُعرض معطّلة للعلم فقط). */
+function userTypeOptionsHTML(currentType, editing){
+  const u = Session.user;
+  const allowProtected = Perm.canAssignProtectedType(u);
+  const allowCommittee = Perm.isCommitteeManager(u); // مدير اللجنة وحده يضيف مراجعين
+  return USER_TYPES
+    .filter(t=> allowCommittee || !COMMITTEE_TYPES.includes(t) || t===currentType)
+    .filter(t=> allowProtected || !isProtectedType(t) || t===currentType || !editing)
+    .map(t=>`<option value="${t}" ${currentType===t?'selected':''}>${t}</option>`).join('');
+}
+
 Modals.addUser = function(){
   const u = Session.user;
   const isAud = Perm.isAuditor(u);
-  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}">${t}</option>`).join('');
+  const typeOpts = userTypeOptionsHTML('', false);
   const fedOpts = isAud ? DB.federations.map(f=>`<option value="${f.federation_id}">${esc(f.federation_name_ar)}</option>`).join('') : '';
   const body = `
     <div class="alert alert-info">سيُضاف هذا المستخدم بحالة "تحت المعالجة" لحين اعتماده من رئيس الاتحاد أو المدير التنفيذي.<br>لا حاجة لكتابة كلمة مرور — يولّدها النظام تلقائيًا ويرسلها إلى بريد المستخدم نفسه، ولا يطّلع عليها أحد سواه.</div>
@@ -2919,7 +3026,8 @@ Modals.addUser = function(){
       ${isAud ? `<div class="field full"><label>الاتحاد <span class="muted">— إلزامي</span></label><select id="nuFed">${fedOpts}</select></div>` : ''}
       <div class="field"><label>الاسم (عربي) <span class="muted">— إلزامي</span></label><input type="text" id="nuNameAr"></div>
       <div class="field"><label>الاسم (إنجليزي) <span class="muted">— إلزامي</span></label><input type="text" id="nuNameEn"></div>
-      <div class="field"><label>نوع المستخدم</label><select id="nuType">${typeOpts}</select></div>
+      <div class="field"><label>نوع المستخدم</label><select id="nuType" onchange="toggleContinentalField('nu')">${typeOpts}</select></div>
+      ${continentalFieldHTML('nu', false, false)}
       <div class="field"><label>المسمى الوظيفي <span class="muted">— إلزامي</span></label><input type="text" id="nuJob"></div>
       <div class="field"><label>اسم المستخدم (للدخول) <span class="muted">— إلزامي</span></label><input type="text" id="nuUsername"></div>
       <div class="field"><label>الجوال <span class="muted">— إلزامي</span></label><input type="text" id="nuPhone"></div>
@@ -2931,6 +3039,7 @@ Modals.addUser = function(){
   openModalHTML(modalShell('addUserModal','إضافة مستخدم جديد', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.saveUser()">حفظ (تحت المعالجة)</button>`));
+  toggleContinentalField('nu');
 };
 
 Actions.saveUser = async function(){
@@ -2956,6 +3065,7 @@ Actions.saveUser = async function(){
     phone: phone, email: email,
     // بلا كلمة مرور: الخادم يولّدها ويرسلها لبريد المستخدم
     user_name: username, user_type: document.getElementById('nuType').value,
+    is_continental_member: continentalValue('nu'),
     Job_Title: job, language:'ar',
     created_at: nowISO(), created_by: u.user_id
   };
@@ -2974,13 +3084,22 @@ Actions.saveUser = async function(){
 
 Modals.editUser = function(userId){
   const x = DB.users.find(u=>u.user_id===userId);
-  const typeOpts = USER_TYPES.filter(t=>t!=='مراجع').map(t=>`<option value="${t}" ${x.user_type===t?'selected':''}>${t}</option>`).join('');
+  if(!Perm.canEditUser(Session.user, x)){
+    toast(isProtectedType(x&&x.user_type) ? 'بيانات هذا المستخدم (نوعه ومسماه الوظيفي) لا يعدّلها إلا مراجع اللجنة' : 'لا يمكن تعديل هذا المستخدم','danger');
+    return;
+  }
+  const typeOpts = userTypeOptionsHTML(x.user_type, true);
+  const protectedNote = Perm.canAssignProtectedType(Session.user)
+    ? `<div class="alert alert-warning">أنت مراجع اللجنة — وحدك من يملك تعديل نوع المستخدم والمسمى الوظيفي لـ (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) أو تفعيل حساباتهم.</div>`
+    : `<div class="alert alert-info">الأنواع (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) لا تظهر في القائمة لأن تعيينها من صلاحية مراجع اللجنة حصرًا.</div>`;
   const body = `
-    <div class="alert alert-info">التعديل متاح فقط ما دام الحساب بحالة "تحت المعالجة". كلمات المرور لا تُعرض لأحد — إن احتاج المستخدم كلمة مرور جديدة، أرسِلها إلى بريده بالزر أدناه.</div>
+    ${protectedNote}
+    <div class="alert alert-info">التعديل متاح فقط ما دام الحساب بحالة "تحت المعالجة" (عدا مراجع اللجنة). كلمات المرور لا تُعرض لأحد — إن احتاج المستخدم كلمة مرور جديدة، أرسِلها إلى بريده بالزر أدناه.</div>
     <div class="form-grid mt-12">
       <div class="field"><label>الاسم (عربي)</label><input type="text" id="euNameAr" value="${esc(x.employee_name_ar||'')}"></div>
       <div class="field"><label>الاسم (إنجليزي)</label><input type="text" id="euNameEn" value="${esc(x.employee_name_en||'')}"></div>
-      <div class="field"><label>نوع المستخدم</label><select id="euType">${typeOpts}</select></div>
+      <div class="field"><label>نوع المستخدم</label><select id="euType" onchange="toggleContinentalField('eu')">${typeOpts}</select></div>
+      ${continentalFieldHTML('eu', !!x.is_continental_member, asksContinental(x.user_type))}
       <div class="field"><label>المسمى الوظيفي</label><input type="text" id="euJob" value="${esc(x.Job_Title||'')}"></div>
       <div class="field"><label>اسم المستخدم (للدخول)</label><input type="text" id="euUsername" value="${esc(x.user_name||'')}"></div>
       <div class="field"><label>كلمة المرور</label><button type="button" class="btn btn-outline" style="width:100%;" onclick="resendCredentials('${userId}')">✉ إرسال كلمة مرور جديدة لبريد المستخدم</button></div>
@@ -2993,12 +3112,17 @@ Modals.editUser = function(userId){
   openModalHTML(modalShell('editUserModal','تعديل بيانات مستخدم', body, true,
     `<button class="btn btn-outline" onclick="closeModal()">إلغاء</button>
      <button class="btn btn-primary" onclick="Actions.updateUser('${userId}')">حفظ التعديل</button>`));
+  toggleContinentalField('eu');
 };
 
 Actions.updateUser = async function(userId){
   const u = Session.user;
   const x = DB.users.find(t=>t.user_id===userId);
-  if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم','danger'); return; }
+  if(!Perm.canEditUser(u,x)){ toast('لا يمكن تعديل هذا المستخدم — الأنواع القيادية لا يعدّلها إلا مراجع اللجنة','danger'); return; }
+  const newType = document.getElementById('euType').value;
+  if(isProtectedType(newType) && newType!==x.user_type && !Perm.canAssignProtectedType(u)){
+    toast('تعيين نوع المستخدم إلى (رئيس الاتحاد / مدير تنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) من صلاحية مراجع اللجنة فقط','danger'); return;
+  }
   const nameAr = document.getElementById('euNameAr').value.trim();
   const username = document.getElementById('euUsername').value.trim();
   if(!nameAr || !username){ toast('الرجاء تعبئة الاسم واسم المستخدم','danger'); return; }
@@ -3006,7 +3130,8 @@ Actions.updateUser = async function(userId){
   const patch = {
     employee_name_ar: nameAr,
     employee_name_en: document.getElementById('euNameEn').value.trim(),
-    user_type: document.getElementById('euType').value,
+    user_type: newType,
+    is_continental_member: continentalValue('eu'),
     Job_Title: document.getElementById('euJob').value.trim(),
     user_name: username,
     phone: document.getElementById('euPhone').value.trim(),
@@ -3025,7 +3150,9 @@ Actions.changeUserStatus = async function(userId, newStatus){
   if(!newStatus) return;
   const u = Session.user;
   const target = DB.users.find(x=>x.user_id===userId);
-  if(!Perm.canChangeUserStatusFor(u, target)){ toast('لا تملك صلاحية تغيير الحالة','danger'); return; }
+  if(!Perm.canChangeUserStatusFor(u, target)){
+    toast(isProtectedType(target&&target.user_type) ? 'حسابات (رئيس الاتحاد / المدير التنفيذي / رئيس مجلس الإدارة / عضو مجلس الإدارة) لا يفعّلها أو يغيّر حالتها إلا مراجع اللجنة' : 'لا تملك صلاحية تغيير الحالة','danger'); return;
+  }
   const { error } = await apiAction('changeUserStatus', { userId, newStatus });
   if(error){ toast('تعذّر تحديث الحالة: ' + error.message, 'danger'); return; }
   await refreshAfterAction();
@@ -3402,6 +3529,7 @@ function buildUserProfilePrintHTML(userId){
 
     <table class="print-kv">
       <tr><td class="lbl">اسم المستخدم</td><td class="val">${esc(target.user_name||'—')}</td><td class="lbl">المسمى الوظيفي</td><td class="val">${esc(target.Job_Title||target.user_type||'—')}</td></tr>
+      ${asksContinental(target.user_type) ? `<tr><td class="lbl">عضو في اتحاد قاري</td><td class="val">${target.is_continental_member?'نعم':'لا'}</td><td class="lbl"></td><td class="val"></td></tr>` : ''}
       <tr><td class="lbl">الجوال</td><td class="val">${esc(target.phone||'—')}</td><td class="lbl">البريد الإلكتروني</td><td class="val">${esc(target.email||'—')}</td></tr>
       <tr><td class="lbl">تاريخ الانضمام</td><td class="val">${fmtDate(target.created_at)}</td><td class="lbl">الاتحاد</td><td class="val">${esc(fed?fed.federation_name_ar:'—')}</td></tr>
     </table>
